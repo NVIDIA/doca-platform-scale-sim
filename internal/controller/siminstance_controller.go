@@ -23,6 +23,7 @@ import (
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
@@ -179,6 +180,10 @@ func (r *SimInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		Named("siminstance").
 		Complete(r)
+}
+
+func instanceConditionTrue(instance *scalev1alpha1.SimInstance, conditionType string) bool {
+	return meta.IsStatusConditionTrue(instance.Status.Conditions, conditionType)
 }
 
 const lifecycleForceTimeout = 5 * time.Minute
