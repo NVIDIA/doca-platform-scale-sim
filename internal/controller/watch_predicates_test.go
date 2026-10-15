@@ -17,12 +17,13 @@ limitations under the License.
 package controller
 
 import (
-	"testing"
-
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	virtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -98,171 +99,8 @@ func updatedNode(mutate func(*provisioningv1.DPUNode)) *provisioningv1.DPUNode {
 	return next
 }
 
-func TestInventoryChildPredicateCreateDelete(t *testing.T) {
-	pred := inventoryChildPredicate()
-	if !pred.Create(event.CreateEvent{Object: fleetDevice()}) {
-		t.Error("DPUDevice create should enqueue")
-	}
-	if !pred.Delete(event.DeleteEvent{Object: fleetDevice()}) {
-		t.Error("DPUDevice delete should enqueue")
-	}
-}
-
-func TestInventoryChildPredicateUpdate(t *testing.T) {
-	pred := inventoryChildPredicate()
-	psid := "MT_STATUS"
-	installInterface := "hostAgent"
-	bmcIP := "10.1.2.3"
-	numberOfPFs := 2
-	deletedAt := metav1.Now()
-
-	tests := []struct {
-		name    string
-		oldObj  client.Object
-		newObj  client.Object
-		enqueue bool
-	}{
-		{
-			name:   "DPUDevice status only",
-			oldObj: fleetDevice(),
-			newObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				d.Status.PSID = &psid
-			}),
-		},
-		{
-			name:   "DPUNode status only",
-			oldObj: fleetNode(),
-			newObj: updatedNode(func(n *provisioningv1.DPUNode) {
-				n.Status.DPUInstallInterface = &installInterface
-			}),
-		},
-		{
-			name:   "DPUDevice finalizer added by DPF",
-			oldObj: fleetDevice(),
-			newObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				d.Finalizers = append(d.Finalizers, "provisioning.dpu.nvidia.com/dpudevice-protection")
-			}),
-		},
-		{
-			name:   "DPUNode finalizer removed by DPF",
-			oldObj: fleetNode(),
-			newObj: updatedNode(func(n *provisioningv1.DPUNode) {
-				n.Finalizers = nil
-			}),
-		},
-		{
-			name:   "DPUNode annotation added by DPF",
-			oldObj: fleetNode(),
-			newObj: updatedNode(func(n *provisioningv1.DPUNode) {
-				n.Annotations = map[string]string{"provisioning.dpu.nvidia.com/reboot": "required"}
-			}),
-		},
-		{
-			name:   "DPUDevice label added by DPF",
-			oldObj: fleetDevice(),
-			newObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				d.Labels["provisioning.dpu.nvidia.com/dpu-detected"] = "true"
-			}),
-		},
-		{
-			name: "DPUDevice extra DPF label later removed",
-			oldObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				d.Labels["provisioning.dpu.nvidia.com/dpu-detected"] = "true"
-			}),
-			newObj: fleetDevice(),
-		},
-		{
-			name:   "DPUDevice spec field owned by DPF",
-			oldObj: fleetDevice(),
-			newObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				d.Generation = 2
-				d.Spec.BMCIP = &bmcIP
-			}),
-		},
-		{
-			name:   "DPUDevice non-controller owner added",
-			oldObj: fleetDevice(),
-			newObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				d.OwnerReferences = append(d.OwnerReferences, metav1.OwnerReference{
-					APIVersion: "provisioning.dpu.nvidia.com/v1alpha1",
-					Kind:       "DPUNode",
-					Name:       "scale-3000-host-0000",
-					UID:        "node-uid",
-				})
-			}),
-		},
-		{
-			name:   "DPUDevice fleet label removed",
-			oldObj: fleetDevice(),
-			newObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				delete(d.Labels, labelOrdinal)
-			}),
-			enqueue: true,
-		},
-		{
-			name:   "DPUNode fleet label overwritten",
-			oldObj: fleetNode(),
-			newObj: updatedNode(func(n *provisioningv1.DPUNode) {
-				n.Labels[labelFleetUID] = "other-uid"
-			}),
-			enqueue: true,
-		},
-		{
-			name:   "DPUDevice controller reference removed",
-			oldObj: fleetDevice(),
-			newObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				d.OwnerReferences = nil
-			}),
-			enqueue: true,
-		},
-		{
-			name:   "DPUNode deletion timestamp set",
-			oldObj: fleetNode(),
-			newObj: updatedNode(func(n *provisioningv1.DPUNode) {
-				n.DeletionTimestamp = &deletedAt
-			}),
-			enqueue: true,
-		},
-		{
-			name:   "DPUDevice numberOfPFs changed",
-			oldObj: fleetDevice(),
-			newObj: updatedDevice(func(d *provisioningv1.DPUDevice) {
-				d.Generation = 2
-				d.Spec.NumberOfPFs = &numberOfPFs
-			}),
-		},
-		{
-			name:   "DPUNode spec.dpus emptied",
-			oldObj: fleetNode(),
-			newObj: updatedNode(func(n *provisioningv1.DPUNode) {
-				n.Generation = 2
-				n.Spec.DPUs = nil
-			}),
-			enqueue: true,
-		},
-		{
-			name:   "DPUNode reboot method changed",
-			oldObj: fleetNode(),
-			newObj: updatedNode(func(n *provisioningv1.DPUNode) {
-				n.Generation = 2
-				n.Spec.NodeRebootMethod = &provisioningv1.NodeRebootMethod{HostAgent: &provisioningv1.HostAgent{}}
-			}),
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := pred.Update(event.UpdateEvent{ObjectOld: test.oldObj, ObjectNew: test.newObj})
-			if got != test.enqueue {
-				t.Errorf("Update() = %t, want %t", got, test.enqueue)
-			}
-		})
-	}
-}
-
-func TestDPUWatchPredicate(t *testing.T) {
-	pred := dpuWatchPredicate()
-	oldDPU := &provisioningv1.DPU{
+func watchedDPU() *provisioningv1.DPU {
+	return &provisioningv1.DPU{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "host-device",
 			Namespace:       "default",
@@ -273,68 +111,10 @@ func TestDPUWatchPredicate(t *testing.T) {
 			DPUNodeName:   "scale-3000-host-0000",
 		},
 	}
-
-	if !pred.Create(event.CreateEvent{Object: oldDPU}) {
-		t.Fatal("DPU create should enqueue")
-	}
-	if !pred.Delete(event.DeleteEvent{Object: oldDPU}) {
-		t.Fatal("DPU delete should enqueue")
-	}
-
-	statusDPU := oldDPU.DeepCopy()
-	statusDPU.ResourceVersion = "2"
-	statusDPU.Status.Phase = provisioningv1.DPUReady
-	if pred.Update(event.UpdateEvent{ObjectOld: oldDPU, ObjectNew: statusDPU}) {
-		t.Fatal("DPU status-only update should not enqueue")
-	}
-
-	deletingDPU := oldDPU.DeepCopy()
-	deletedAt := metav1.Now()
-	deletingDPU.DeletionTimestamp = &deletedAt
-	deletingDPU.ResourceVersion = "2"
-	if !pred.Update(event.UpdateEvent{ObjectOld: oldDPU, ObjectNew: deletingDPU}) {
-		t.Fatal("DPU deletion timestamp change should enqueue")
-	}
-
-	flavorDPU := oldDPU.DeepCopy()
-	flavorDPU.Spec.DPUFlavor = "other"
-	flavorDPU.Generation = 2
-	if pred.Update(event.UpdateEvent{ObjectOld: oldDPU, ObjectNew: flavorDPU}) {
-		t.Fatal("unrelated DPU spec change should not enqueue")
-	}
-
-	renamed := oldDPU.DeepCopy()
-	renamed.Spec.DPUDeviceName = "scale-3000-device-000001"
-	renamed.Generation = 2
-	if !pred.Update(event.UpdateEvent{ObjectOld: oldDPU, ObjectNew: renamed}) {
-		t.Fatal("DPU spec.dpuDeviceName change should enqueue")
-	}
-
-	configured := oldDPU.DeepCopy()
-	configured.ResourceVersion = "2"
-	configured.Status.AgentStatus = &provisioningv1.AgentStatus{}
-	meta.SetStatusCondition(&configured.Status.AgentStatus.Conditions, metav1.Condition{
-		Type:   "KubeletConfigured",
-		Status: metav1.ConditionTrue,
-		Reason: "Configured",
-	})
-	if !pred.Update(event.UpdateEvent{ObjectOld: oldDPU, ObjectNew: configured}) {
-		t.Fatal("DPU KubeletConfigured becoming True should enqueue")
-	}
-	if !pred.Update(event.UpdateEvent{ObjectOld: configured, ObjectNew: oldDPU}) {
-		t.Fatal("DPU KubeletConfigured leaving True should enqueue")
-	}
-	stillConfigured := configured.DeepCopy()
-	stillConfigured.ResourceVersion = "3"
-	stillConfigured.Status.Phase = provisioningv1.DPUReady
-	if pred.Update(event.UpdateEvent{ObjectOld: configured, ObjectNew: stillConfigured}) {
-		t.Fatal("DPU status update that keeps KubeletConfigured should not enqueue")
-	}
 }
 
-func TestVirtualMachineWatchPredicate(t *testing.T) {
-	pred := virtualMachineWatchPredicate()
-	oldVM := &virtv1.VirtualMachine{
+func watchedVM() *virtv1.VirtualMachine {
+	return &virtv1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "scale-3000-dpu-000000",
 			Namespace:       "default",
@@ -342,105 +122,10 @@ func TestVirtualMachineWatchPredicate(t *testing.T) {
 			ResourceVersion: "1",
 		},
 	}
-
-	if !pred.Create(event.CreateEvent{Object: oldVM}) {
-		t.Fatal("VirtualMachine create should enqueue")
-	}
-	if !pred.Delete(event.DeleteEvent{Object: oldVM}) {
-		t.Fatal("VirtualMachine delete should enqueue")
-	}
-
-	deletedAt := metav1.Now()
-	tests := []struct {
-		name    string
-		oldObj  client.Object
-		newObj  client.Object
-		mutate  func(*virtv1.VirtualMachine)
-		enqueue bool
-	}{
-		{
-			name:   "nil old object",
-			newObj: oldVM,
-		},
-		{
-			name:   "nil new object",
-			oldObj: oldVM,
-		},
-		{
-			name:   "wrong old object type",
-			oldObj: &provisioningv1.DPU{},
-			newObj: &provisioningv1.DPU{},
-		},
-		{
-			name:   "wrong new object type",
-			oldObj: oldVM,
-			newObj: &provisioningv1.DPU{},
-		},
-		{
-			name: "annotation only",
-			mutate: func(vm *virtv1.VirtualMachine) {
-				vm.Annotations = map[string]string{"example.com/noise": "value"}
-			},
-		},
-		{
-			name: "printable status only",
-			mutate: func(vm *virtv1.VirtualMachine) {
-				vm.Status.PrintableStatus = virtv1.VirtualMachineStatusRunning
-			},
-		},
-		{
-			name: "status condition only",
-			mutate: func(vm *virtv1.VirtualMachine) {
-				vm.Status.Conditions = append(vm.Status.Conditions, virtv1.VirtualMachineCondition{
-					Type:   "Failure",
-					Status: corev1.ConditionFalse,
-				})
-			},
-		},
-		{
-			name: "ready changed",
-			mutate: func(vm *virtv1.VirtualMachine) {
-				vm.Status.Ready = true
-			},
-			enqueue: true,
-		},
-		{
-			name: "deletion timestamp changed",
-			mutate: func(vm *virtv1.VirtualMachine) {
-				vm.DeletionTimestamp = &deletedAt
-			},
-			enqueue: true,
-		},
-		{
-			name: "controller owner changed",
-			mutate: func(vm *virtv1.VirtualMachine) {
-				vm.OwnerReferences[0].Name = "other-fleet"
-			},
-			enqueue: true,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			oldObj, newObj := test.oldObj, test.newObj
-			if test.mutate != nil {
-				oldObj = oldVM
-				newVM := oldVM.DeepCopy()
-				newVM.ResourceVersion = "2"
-				test.mutate(newVM)
-				newObj = newVM
-			}
-			got := pred.Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj})
-			if got != test.enqueue {
-				t.Errorf("Update() = %t, want %t", got, test.enqueue)
-			}
-		})
-	}
 }
 
-func TestVMIWatchPredicate(t *testing.T) {
-	pred := vmiWatchPredicate()
-	oldVMI := &virtv1.VirtualMachineInstance{
+func watchedVMI() *virtv1.VirtualMachineInstance {
+	return &virtv1.VirtualMachineInstance{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "scale-3000-dpu-000000",
 			Namespace:       "default",
@@ -458,133 +143,6 @@ func TestVMIWatchPredicate(t *testing.T) {
 			}},
 		},
 	}
-
-	if !pred.Create(event.CreateEvent{Object: oldVMI}) {
-		t.Fatal("VMI create should enqueue")
-	}
-	if !pred.Delete(event.DeleteEvent{Object: oldVMI}) {
-		t.Fatal("VMI delete should enqueue")
-	}
-
-	deletedAt := metav1.Now()
-	tests := []struct {
-		name    string
-		mutate  func(*virtv1.VirtualMachineInstance)
-		enqueue bool
-	}{
-		{
-			name: "metadata only",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Annotations = map[string]string{"example.com/noise": "value"}
-			},
-		},
-		{
-			name: "unrelated status noise",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Reason = "StatusNoise"
-			},
-		},
-		{
-			name: "ready condition details only",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Conditions[0].Reason = "DifferentReason"
-				vmi.Status.Conditions[0].Message = "Different message"
-				vmi.Status.Conditions[0].LastTransitionTime = metav1.Now()
-			},
-		},
-		{
-			name: "unrelated condition",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Conditions = append(vmi.Status.Conditions, virtv1.VirtualMachineInstanceCondition{
-					Type:   virtv1.VirtualMachineInstanceSynchronized,
-					Status: corev1.ConditionTrue,
-				})
-			},
-		},
-		{
-			name: "phase changed",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Phase = virtv1.Running
-			},
-			enqueue: true,
-		},
-		{
-			name: "ready status changed",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Conditions[0].Status = corev1.ConditionTrue
-			},
-			enqueue: true,
-		},
-		{
-			name: "deletion timestamp changed",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.DeletionTimestamp = &deletedAt
-			},
-			enqueue: true,
-		},
-		{
-			name: "ready condition removed",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Conditions = nil
-			},
-			enqueue: true,
-		},
-		// The bridged address is what the instance publishes as spec.bmcIP,
-		// and it arrives on its own status update: the guest reports it well
-		// before Ready and without a phase change. Ignoring it would leave
-		// the device unselectable until some unrelated event.
-		{
-			name: "default interface reported an address",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Interfaces = []virtv1.VirtualMachineInstanceNetworkInterface{{
-					Name: "default", IP: "10.1.2.3",
-				}}
-			},
-			enqueue: true,
-		},
-		{
-			name: "interface noise the fleet does not publish",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Interfaces[0].MAC = "02:00:00:00:00:01"
-				vmi.Status.Interfaces[0].QueueCount = 4
-				vmi.Status.Interfaces[0].InfoSource = "domain, guest-agent"
-			},
-		},
-		{
-			name: "another network reported an address",
-			mutate: func(vmi *virtv1.VirtualMachineInstance) {
-				vmi.Status.Interfaces = append(
-					vmi.Status.Interfaces,
-					virtv1.VirtualMachineInstanceNetworkInterface{Name: "secondary", IP: "10.9.9.9"},
-				)
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			newVMI := oldVMI.DeepCopy()
-			newVMI.ResourceVersion = "2"
-			test.mutate(newVMI)
-			got := pred.Update(event.UpdateEvent{ObjectOld: oldVMI, ObjectNew: newVMI})
-			if got != test.enqueue {
-				t.Errorf("Update() = %t, want %t", got, test.enqueue)
-			}
-		})
-	}
-
-	// A guest that comes back on a different address has to republish
-	// spec.bmcIP, so the move itself has to reach the reconciler.
-	t.Run("default interface moved to a new address", func(t *testing.T) {
-		published := oldVMI.DeepCopy()
-		published.Status.Interfaces[0].IP = "10.1.2.3"
-		moved := published.DeepCopy()
-		moved.ResourceVersion = "3"
-		moved.Status.Interfaces[0].IP = "10.4.5.6"
-		if !pred.Update(event.UpdateEvent{ObjectOld: published, ObjectNew: moved}) {
-			t.Error("Update() = false for a guest that moved address")
-		}
-	})
 }
 
 func fleetSecret() *corev1.Secret {
@@ -606,131 +164,363 @@ func fleetSecret() *corev1.Secret {
 	}
 }
 
-func TestSecretWatchPredicate(t *testing.T) {
-	pred := secretWatchPredicate()
-	oldSecret := fleetSecret()
+// watchUpdate is an update event for predicates whose table also covers
+// malformed events: when mutate is set it replaces oldObj/newObj with the
+// fixture and a mutated copy of it.
+type watchUpdate[T client.Object] struct {
+	oldObj client.Object
+	newObj client.Object
+	mutate func(T)
+}
 
-	if !pred.Create(event.CreateEvent{Object: oldSecret}) {
-		t.Fatal("Secret create should enqueue")
-	}
-	if !pred.Delete(event.DeleteEvent{Object: oldSecret}) {
-		t.Fatal("Secret delete should enqueue")
-	}
+var _ = Describe("Watch predicates", func() {
+	Describe("Inventory child", func() {
+		It("enqueues DPUDevice create and delete", func() {
+			pred := inventoryChildPredicate()
+			Expect(pred.Create(event.CreateEvent{Object: fleetDevice()})).To(BeTrue(), "DPUDevice create should enqueue")
+			Expect(pred.Delete(event.DeleteEvent{Object: fleetDevice()})).To(BeTrue(), "DPUDevice delete should enqueue")
+		})
 
-	deletedAt := metav1.Now()
-	tests := []struct {
-		name    string
-		oldObj  client.Object
-		newObj  client.Object
-		mutate  func(*corev1.Secret)
-		enqueue bool
-	}{
-		{
-			name:   "nil old object",
-			newObj: oldSecret,
-		},
-		{
-			name:   "nil new object",
-			oldObj: oldSecret,
-		},
-		{
-			name:   "wrong old object type",
-			oldObj: &provisioningv1.DPU{},
-			newObj: &provisioningv1.DPU{},
-		},
-		{
-			name:   "wrong new object type",
-			oldObj: oldSecret,
-			newObj: &provisioningv1.DPU{},
-		},
-		{
-			name: "data only",
-			mutate: func(secret *corev1.Secret) {
+		DescribeTable("filters updates",
+			func(oldObj, newObj client.Object, enqueue bool) {
+				pred := inventoryChildPredicate()
+				Expect(pred.Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj})).To(Equal(enqueue))
+			},
+			Entry("DPUDevice status only", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
+				d.Status.PSID = ptr.To("MT_STATUS")
+			}), false),
+			Entry("DPUNode status only", fleetNode(), updatedNode(func(n *provisioningv1.DPUNode) {
+				n.Status.DPUInstallInterface = ptr.To("hostAgent")
+			}), false),
+			Entry("DPUDevice finalizer added by DPF", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
+				d.Finalizers = append(d.Finalizers, "provisioning.dpu.nvidia.com/dpudevice-protection")
+			}), false),
+			Entry("DPUNode finalizer removed by DPF", fleetNode(), updatedNode(func(n *provisioningv1.DPUNode) {
+				n.Finalizers = nil
+			}), false),
+			Entry("DPUNode annotation added by DPF", fleetNode(), updatedNode(func(n *provisioningv1.DPUNode) {
+				n.Annotations = map[string]string{"provisioning.dpu.nvidia.com/reboot": "required"}
+			}), false),
+			Entry("DPUDevice label added by DPF", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
+				d.Labels["provisioning.dpu.nvidia.com/dpu-detected"] = "true"
+			}), false),
+			Entry("DPUDevice extra DPF label later removed", updatedDevice(func(d *provisioningv1.DPUDevice) {
+				d.Labels["provisioning.dpu.nvidia.com/dpu-detected"] = "true"
+			}), fleetDevice(), false),
+			Entry("DPUDevice spec field owned by DPF", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
+				d.Generation = 2
+				d.Spec.BMCIP = ptr.To("10.1.2.3")
+			}), false),
+			Entry("DPUDevice non-controller owner added", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
+				d.OwnerReferences = append(d.OwnerReferences, metav1.OwnerReference{
+					APIVersion: "provisioning.dpu.nvidia.com/v1alpha1",
+					Kind:       "DPUNode",
+					Name:       "scale-3000-host-0000",
+					UID:        "node-uid",
+				})
+			}), false),
+			Entry("DPUDevice fleet label removed", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
+				delete(d.Labels, labelOrdinal)
+			}), true),
+			Entry("DPUNode fleet label overwritten", fleetNode(), updatedNode(func(n *provisioningv1.DPUNode) {
+				n.Labels[labelFleetUID] = "other-uid"
+			}), true),
+			Entry("DPUDevice controller reference removed", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
+				d.OwnerReferences = nil
+			}), true),
+			Entry("DPUNode deletion timestamp set", fleetNode(), updatedNode(func(n *provisioningv1.DPUNode) {
+				n.DeletionTimestamp = ptr.To(metav1.Now())
+			}), true),
+			Entry("DPUDevice numberOfPFs changed", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
+				d.Generation = 2
+				d.Spec.NumberOfPFs = ptr.To(2)
+			}), false),
+			Entry("DPUNode spec.dpus emptied", fleetNode(), updatedNode(func(n *provisioningv1.DPUNode) {
+				n.Generation = 2
+				n.Spec.DPUs = nil
+			}), true),
+			Entry("DPUNode reboot method changed", fleetNode(), updatedNode(func(n *provisioningv1.DPUNode) {
+				n.Generation = 2
+				n.Spec.NodeRebootMethod = &provisioningv1.NodeRebootMethod{HostAgent: &provisioningv1.HostAgent{}}
+			}), false),
+		)
+	})
+
+	Describe("DPU", func() {
+		var oldDPU *provisioningv1.DPU
+
+		BeforeEach(func() {
+			oldDPU = watchedDPU()
+		})
+
+		update := func(oldObj, newObj client.Object) bool {
+			return dpuWatchPredicate().Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj})
+		}
+
+		It("enqueues DPU create and delete", func() {
+			pred := dpuWatchPredicate()
+			Expect(pred.Create(event.CreateEvent{Object: oldDPU})).To(BeTrue(), "DPU create should enqueue")
+			Expect(pred.Delete(event.DeleteEvent{Object: oldDPU})).To(BeTrue(), "DPU delete should enqueue")
+		})
+
+		It("ignores a status-only update", func() {
+			statusDPU := oldDPU.DeepCopy()
+			statusDPU.ResourceVersion = "2"
+			statusDPU.Status.Phase = provisioningv1.DPUReady
+			Expect(update(oldDPU, statusDPU)).To(BeFalse())
+		})
+
+		It("enqueues a deletion timestamp change", func() {
+			deletingDPU := oldDPU.DeepCopy()
+			deletingDPU.DeletionTimestamp = ptr.To(metav1.Now())
+			deletingDPU.ResourceVersion = "2"
+			Expect(update(oldDPU, deletingDPU)).To(BeTrue())
+		})
+
+		It("ignores an unrelated spec change", func() {
+			flavorDPU := oldDPU.DeepCopy()
+			flavorDPU.Spec.DPUFlavor = "other"
+			flavorDPU.Generation = 2
+			Expect(update(oldDPU, flavorDPU)).To(BeFalse())
+		})
+
+		It("enqueues a spec.dpuDeviceName change", func() {
+			renamed := oldDPU.DeepCopy()
+			renamed.Spec.DPUDeviceName = "scale-3000-device-000001"
+			renamed.Generation = 2
+			Expect(update(oldDPU, renamed)).To(BeTrue())
+		})
+
+		It("enqueues KubeletConfigured transitions and ignores updates that keep it True", func() {
+			configured := oldDPU.DeepCopy()
+			configured.ResourceVersion = "2"
+			configured.Status.AgentStatus = &provisioningv1.AgentStatus{}
+			meta.SetStatusCondition(&configured.Status.AgentStatus.Conditions, metav1.Condition{
+				Type:   "KubeletConfigured",
+				Status: metav1.ConditionTrue,
+				Reason: "Configured",
+			})
+			Expect(update(oldDPU, configured)).To(BeTrue(), "DPU KubeletConfigured becoming True should enqueue")
+			Expect(update(configured, oldDPU)).To(BeTrue(), "DPU KubeletConfigured leaving True should enqueue")
+
+			stillConfigured := configured.DeepCopy()
+			stillConfigured.ResourceVersion = "3"
+			stillConfigured.Status.Phase = provisioningv1.DPUReady
+			Expect(update(configured, stillConfigured)).To(BeFalse(),
+				"DPU status update that keeps KubeletConfigured should not enqueue")
+		})
+	})
+
+	Describe("VirtualMachine", func() {
+		It("enqueues VirtualMachine create and delete", func() {
+			pred := virtualMachineWatchPredicate()
+			Expect(pred.Create(event.CreateEvent{Object: watchedVM()})).To(BeTrue(), "VirtualMachine create should enqueue")
+			Expect(pred.Delete(event.DeleteEvent{Object: watchedVM()})).To(BeTrue(), "VirtualMachine delete should enqueue")
+		})
+
+		DescribeTable("filters updates",
+			func(test watchUpdate[*virtv1.VirtualMachine], enqueue bool) {
+				oldObj, newObj := test.oldObj, test.newObj
+				if test.mutate != nil {
+					oldVM := watchedVM()
+					newVM := oldVM.DeepCopy()
+					newVM.ResourceVersion = "2"
+					test.mutate(newVM)
+					oldObj, newObj = oldVM, newVM
+				}
+				got := virtualMachineWatchPredicate().Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj})
+				Expect(got).To(Equal(enqueue))
+			},
+			Entry("nil old object", watchUpdate[*virtv1.VirtualMachine]{newObj: watchedVM()}, false),
+			Entry("nil new object", watchUpdate[*virtv1.VirtualMachine]{oldObj: watchedVM()}, false),
+			Entry("wrong old object type",
+				watchUpdate[*virtv1.VirtualMachine]{oldObj: &provisioningv1.DPU{}, newObj: &provisioningv1.DPU{}}, false),
+			Entry("wrong new object type",
+				watchUpdate[*virtv1.VirtualMachine]{oldObj: watchedVM(), newObj: &provisioningv1.DPU{}}, false),
+			Entry("annotation only", watchUpdate[*virtv1.VirtualMachine]{mutate: func(vm *virtv1.VirtualMachine) {
+				vm.Annotations = map[string]string{"example.com/noise": "value"}
+			}}, false),
+			Entry("printable status only", watchUpdate[*virtv1.VirtualMachine]{mutate: func(vm *virtv1.VirtualMachine) {
+				vm.Status.PrintableStatus = virtv1.VirtualMachineStatusRunning
+			}}, false),
+			Entry("status condition only", watchUpdate[*virtv1.VirtualMachine]{mutate: func(vm *virtv1.VirtualMachine) {
+				vm.Status.Conditions = append(vm.Status.Conditions, virtv1.VirtualMachineCondition{
+					Type:   "Failure",
+					Status: corev1.ConditionFalse,
+				})
+			}}, false),
+			Entry("ready changed", watchUpdate[*virtv1.VirtualMachine]{mutate: func(vm *virtv1.VirtualMachine) {
+				vm.Status.Ready = true
+			}}, true),
+			Entry("deletion timestamp changed", watchUpdate[*virtv1.VirtualMachine]{mutate: func(vm *virtv1.VirtualMachine) {
+				vm.DeletionTimestamp = ptr.To(metav1.Now())
+			}}, true),
+			Entry("controller owner changed", watchUpdate[*virtv1.VirtualMachine]{mutate: func(vm *virtv1.VirtualMachine) {
+				vm.OwnerReferences[0].Name = "other-fleet"
+			}}, true),
+		)
+	})
+
+	Describe("VirtualMachineInstance", func() {
+		It("enqueues VMI create and delete", func() {
+			pred := vmiWatchPredicate()
+			Expect(pred.Create(event.CreateEvent{Object: watchedVMI()})).To(BeTrue(), "VMI create should enqueue")
+			Expect(pred.Delete(event.DeleteEvent{Object: watchedVMI()})).To(BeTrue(), "VMI delete should enqueue")
+		})
+
+		DescribeTable("filters updates",
+			func(mutate func(*virtv1.VirtualMachineInstance), enqueue bool) {
+				oldVMI := watchedVMI()
+				newVMI := oldVMI.DeepCopy()
+				newVMI.ResourceVersion = "2"
+				mutate(newVMI)
+				got := vmiWatchPredicate().Update(event.UpdateEvent{ObjectOld: oldVMI, ObjectNew: newVMI})
+				Expect(got).To(Equal(enqueue))
+			},
+			Entry("metadata only", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Annotations = map[string]string{"example.com/noise": "value"}
+			}, false),
+			Entry("unrelated status noise", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Reason = "StatusNoise"
+			}, false),
+			Entry("ready condition details only", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Conditions[0].Reason = "DifferentReason"
+				vmi.Status.Conditions[0].Message = "Different message"
+				vmi.Status.Conditions[0].LastTransitionTime = metav1.Now()
+			}, false),
+			Entry("unrelated condition", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Conditions = append(vmi.Status.Conditions, virtv1.VirtualMachineInstanceCondition{
+					Type:   virtv1.VirtualMachineInstanceSynchronized,
+					Status: corev1.ConditionTrue,
+				})
+			}, false),
+			Entry("phase changed", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Phase = virtv1.Running
+			}, true),
+			Entry("ready status changed", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Conditions[0].Status = corev1.ConditionTrue
+			}, true),
+			Entry("deletion timestamp changed", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.DeletionTimestamp = ptr.To(metav1.Now())
+			}, true),
+			Entry("ready condition removed", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Conditions = nil
+			}, true),
+			// The bridged address is what the instance publishes as spec.bmcIP,
+			// and it arrives on its own status update: the guest reports it well
+			// before Ready and without a phase change. Ignoring it would leave
+			// the device unselectable until some unrelated event.
+			Entry("default interface reported an address", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Interfaces = []virtv1.VirtualMachineInstanceNetworkInterface{{
+					Name: "default", IP: "10.1.2.3",
+				}}
+			}, true),
+			Entry("interface noise the fleet does not publish", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Interfaces[0].MAC = "02:00:00:00:00:01"
+				vmi.Status.Interfaces[0].QueueCount = 4
+				vmi.Status.Interfaces[0].InfoSource = "domain, guest-agent"
+			}, false),
+			Entry("another network reported an address", func(vmi *virtv1.VirtualMachineInstance) {
+				vmi.Status.Interfaces = append(
+					vmi.Status.Interfaces,
+					virtv1.VirtualMachineInstanceNetworkInterface{Name: "secondary", IP: "10.9.9.9"},
+				)
+			}, false),
+		)
+
+		// A guest that comes back on a different address has to republish
+		// spec.bmcIP, so the move itself has to reach the reconciler.
+		It("enqueues when the default interface moved to a new address", func() {
+			published := watchedVMI()
+			published.Status.Interfaces[0].IP = "10.1.2.3"
+			moved := published.DeepCopy()
+			moved.ResourceVersion = "3"
+			moved.Status.Interfaces[0].IP = "10.4.5.6"
+			Expect(vmiWatchPredicate().Update(event.UpdateEvent{ObjectOld: published, ObjectNew: moved})).To(BeTrue(),
+				"Update() = false for a guest that moved address")
+		})
+	})
+
+	Describe("Secret", func() {
+		It("enqueues Secret create and delete", func() {
+			pred := secretWatchPredicate()
+			Expect(pred.Create(event.CreateEvent{Object: fleetSecret()})).To(BeTrue(), "Secret create should enqueue")
+			Expect(pred.Delete(event.DeleteEvent{Object: fleetSecret()})).To(BeTrue(), "Secret delete should enqueue")
+		})
+
+		DescribeTable("filters updates",
+			func(test watchUpdate[*corev1.Secret], enqueue bool) {
+				oldObj, newObj := test.oldObj, test.newObj
+				if test.mutate != nil {
+					oldSecret := fleetSecret()
+					newSecret := oldSecret.DeepCopy()
+					newSecret.ResourceVersion = "2"
+					test.mutate(newSecret)
+					oldObj, newObj = oldSecret, newSecret
+				}
+				got := secretWatchPredicate().Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj})
+				Expect(got).To(Equal(enqueue))
+			},
+			Entry("nil old object", watchUpdate[*corev1.Secret]{newObj: fleetSecret()}, false),
+			Entry("nil new object", watchUpdate[*corev1.Secret]{oldObj: fleetSecret()}, false),
+			Entry("wrong old object type",
+				watchUpdate[*corev1.Secret]{oldObj: &provisioningv1.DPU{}, newObj: &provisioningv1.DPU{}}, false),
+			Entry("wrong new object type",
+				watchUpdate[*corev1.Secret]{oldObj: fleetSecret(), newObj: &provisioningv1.DPU{}}, false),
+			Entry("data only", watchUpdate[*corev1.Secret]{mutate: func(secret *corev1.Secret) {
 				secret.Data["userdata"] = []byte("#cloud-config\nhostname: mutated\n")
-			},
-		},
-		{
-			name: "annotation only",
-			mutate: func(secret *corev1.Secret) {
+			}}, false),
+			Entry("annotation only", watchUpdate[*corev1.Secret]{mutate: func(secret *corev1.Secret) {
 				secret.Annotations = map[string]string{"example.com/noise": "value"}
-			},
-		},
-		{
-			name: "fleet label removed",
-			mutate: func(secret *corev1.Secret) {
+			}}, false),
+			Entry("fleet label removed", watchUpdate[*corev1.Secret]{mutate: func(secret *corev1.Secret) {
 				delete(secret.Labels, labelFleetUID)
-			},
-			enqueue: true,
-		},
-		{
-			name: "controller owner changed",
-			mutate: func(secret *corev1.Secret) {
+			}}, true),
+			Entry("controller owner changed", watchUpdate[*corev1.Secret]{mutate: func(secret *corev1.Secret) {
 				secret.OwnerReferences[0].Name = "other-fleet"
-			},
-			enqueue: true,
-		},
-		{
-			name: "deletion timestamp changed",
-			mutate: func(secret *corev1.Secret) {
-				secret.DeletionTimestamp = &deletedAt
-			},
-			enqueue: true,
-		},
-	}
+			}}, true),
+			Entry("deletion timestamp changed", watchUpdate[*corev1.Secret]{mutate: func(secret *corev1.Secret) {
+				secret.DeletionTimestamp = ptr.To(metav1.Now())
+			}}, true),
+		)
+	})
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			oldObj, newObj := test.oldObj, test.newObj
-			if test.mutate != nil {
-				oldObj = oldSecret
-				newSecret := oldSecret.DeepCopy()
-				newSecret.ResourceVersion = "2"
-				test.mutate(newSecret)
-				newObj = newSecret
-			}
-			got := pred.Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj})
-			if got != test.enqueue {
-				t.Errorf("Update() = %t, want %t", got, test.enqueue)
-			}
+	Describe("SimInstance", func() {
+		var oldInstance *scalev1alpha1.SimInstance
+
+		BeforeEach(func() {
+			fleet := rolloutFleet(3, 1, 3)
+			oldInstance = fleetInstance(fleet, 0, scalev1alpha1.SimInstanceProvisioning, scalev1alpha1.SimInstanceDeviceCreated)
 		})
-	}
-}
 
-func TestSimInstanceWatchPredicate(t *testing.T) {
-	fleet := rolloutFleet(3, 1, 3)
-	oldInstance := fleetInstance(fleet, 0, scalev1alpha1.SimInstanceProvisioning, scalev1alpha1.SimInstanceDeviceCreated)
-	pred := simInstanceWatchPredicate()
-	if !pred.Create(event.CreateEvent{Object: oldInstance}) || !pred.Delete(event.DeleteEvent{Object: oldInstance}) {
-		t.Fatal("SimInstance create and delete should enqueue the fleet")
-	}
-
-	for _, test := range []struct {
-		name    string
-		mutate  func(*scalev1alpha1.SimInstance)
-		enqueue bool
-	}{
-		{"no change", func(*scalev1alpha1.SimInstance) {}, false},
-		{"annotation", func(i *scalev1alpha1.SimInstance) { i.Annotations = map[string]string{"a": "b"} }, false},
-		{"teardown clock", func(i *scalev1alpha1.SimInstance) {
-			now := metav1.Now()
-			i.Status.TeardownStartedAt = &now
-		}, false},
-		{"phase", func(i *scalev1alpha1.SimInstance) { i.Status.Phase = scalev1alpha1.SimInstanceFailed }, true},
-		{"dpu name", func(i *scalev1alpha1.SimInstance) { i.Status.DPUName = "dpu-0" }, true},
-		{"condition", func(i *scalev1alpha1.SimInstance) {
-			setInstanceCondition(i, scalev1alpha1.SimInstanceChildrenCreated, true, "Created", "")
-		}, true},
-		{"deletion", func(i *scalev1alpha1.SimInstance) {
-			now := metav1.Now()
-			i.DeletionTimestamp = &now
-		}, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			newInstance := oldInstance.DeepCopy()
-			test.mutate(newInstance)
-			if got := pred.Update(event.UpdateEvent{ObjectOld: oldInstance, ObjectNew: newInstance}); got != test.enqueue {
-				t.Fatalf("Update() = %t, want %t", got, test.enqueue)
-			}
+		It("enqueues the fleet on SimInstance create and delete", func() {
+			pred := simInstanceWatchPredicate()
+			Expect(pred.Create(event.CreateEvent{Object: oldInstance})).To(BeTrue())
+			Expect(pred.Delete(event.DeleteEvent{Object: oldInstance})).To(BeTrue())
 		})
-	}
-}
+
+		DescribeTable("filters updates",
+			func(mutate func(*scalev1alpha1.SimInstance), enqueue bool) {
+				newInstance := oldInstance.DeepCopy()
+				mutate(newInstance)
+				got := simInstanceWatchPredicate().Update(event.UpdateEvent{ObjectOld: oldInstance, ObjectNew: newInstance})
+				Expect(got).To(Equal(enqueue))
+			},
+			Entry("no change", func(*scalev1alpha1.SimInstance) {}, false),
+			Entry("annotation", func(i *scalev1alpha1.SimInstance) { i.Annotations = map[string]string{"a": "b"} }, false),
+			Entry("teardown clock", func(i *scalev1alpha1.SimInstance) {
+				now := metav1.Now()
+				i.Status.TeardownStartedAt = &now
+			}, false),
+			Entry("phase", func(i *scalev1alpha1.SimInstance) { i.Status.Phase = scalev1alpha1.SimInstanceFailed }, true),
+			Entry("dpu name", func(i *scalev1alpha1.SimInstance) { i.Status.DPUName = "dpu-0" }, true),
+			Entry("condition", func(i *scalev1alpha1.SimInstance) {
+				setInstanceCondition(i, scalev1alpha1.SimInstanceChildrenCreated, true, "Created", "")
+			}, true),
+			Entry("deletion", func(i *scalev1alpha1.SimInstance) {
+				now := metav1.Now()
+				i.DeletionTimestamp = &now
+			}, true),
+		)
+	})
+})

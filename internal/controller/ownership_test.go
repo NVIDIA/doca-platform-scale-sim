@@ -17,12 +17,11 @@ limitations under the License.
 package controller
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"testing"
 	"time"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,178 +42,123 @@ func ownedSecret(ownerRefs ...metav1.OwnerReference) *corev1.Secret {
 	}}
 }
 
-func TestValidateControlledBy(t *testing.T) {
-	owner := &scalev1alpha1.SimInstance{ObjectMeta: metav1.ObjectMeta{
-		Name:      "scale-3000-000000",
-		Namespace: "fleet-ns",
-		UID:       "instance-uid",
-	}}
-	ref := func(uid types.UID, kind string, controller bool) metav1.OwnerReference {
-		return metav1.OwnerReference{
-			APIVersion: scalev1alpha1.GroupVersion.String(),
-			Kind:       kind,
-			Name:       owner.Name,
-			UID:        uid,
-			Controller: ptr.To(controller),
+var _ = Describe("Ownership helpers", func() {
+	Describe("validateControlledBy", func() {
+		const ownerName = "scale-3000-000000"
+		ref := func(uid types.UID, kind string, controller bool) metav1.OwnerReference {
+			return metav1.OwnerReference{
+				APIVersion: scalev1alpha1.GroupVersion.String(),
+				Kind:       kind,
+				Name:       ownerName,
+				UID:        uid,
+				Controller: ptr.To(controller),
+			}
 		}
-	}
-	for _, tc := range []struct {
-		name    string
-		obj     *corev1.Secret
-		wantErr string
-	}{
-		{name: "controlled by owner", obj: ownedSecret(ref("instance-uid", "SimInstance", true))},
-		{
-			name:    "no owner",
-			obj:     ownedSecret(),
-			wantErr: `Secret "child" is missing owner reference`,
-		},
-		{
-			name:    "same UID different kind",
-			obj:     ownedSecret(ref("instance-uid", "SimFleet", true)),
-			wantErr: `Secret "child" is controlled by another owner`,
-		},
-		{
-			name:    "different UID",
-			obj:     ownedSecret(ref("other-uid", "SimInstance", true)),
-			wantErr: `Secret "child" is controlled by another owner`,
-		},
-		{
-			name:    "non-controller owner with matching UID",
-			obj:     ownedSecret(ref("instance-uid", "SimInstance", false)),
-			wantErr: `Secret "child" is missing owner reference`,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateControlledBy(tc.obj, owner, "SimInstance", "Secret")
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("validateControlledBy() = %v, want nil", err)
+
+		DescribeTable("checks the controller reference",
+			func(obj *corev1.Secret, wantErr string) {
+				owner := &scalev1alpha1.SimInstance{ObjectMeta: metav1.ObjectMeta{
+					Name:      ownerName,
+					Namespace: "fleet-ns",
+					UID:       "instance-uid",
+				}}
+				err := validateControlledBy(obj, owner, "SimInstance", "Secret")
+				if wantErr == "" {
+					Expect(err).NotTo(HaveOccurred())
+					return
 				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("validateControlledBy() = nil, want %q", tc.wantErr)
-			}
-			if !errors.Is(err, errOwnershipConflict) {
-				t.Fatalf("validateControlledBy() = %v, want it to wrap errOwnershipConflict", err)
-			}
-			want := fmt.Sprintf("%s: %s", tc.wantErr, errOwnershipConflict)
-			if err.Error() != want {
-				t.Fatalf("validateControlledBy() = %q, want %q", err, want)
-			}
-		})
-	}
-}
+				Expect(err).To(MatchError(errOwnershipConflict))
+				Expect(err).To(MatchError(fmt.Sprintf("%s: %s", wantErr, errOwnershipConflict)))
+			},
+			Entry("controlled by owner", ownedSecret(ref("instance-uid", "SimInstance", true)), ""),
+			Entry("no owner", ownedSecret(), `Secret "child" is missing owner reference`),
+			Entry("same UID different kind",
+				ownedSecret(ref("instance-uid", "SimFleet", true)),
+				`Secret "child" is controlled by another owner`),
+			Entry("different UID",
+				ownedSecret(ref("other-uid", "SimInstance", true)),
+				`Secret "child" is controlled by another owner`),
+			Entry("non-controller owner with matching UID",
+				ownedSecret(ref("instance-uid", "SimInstance", false)),
+				`Secret "child" is missing owner reference`),
+		)
+	})
 
-func TestControllerOwnerKey(t *testing.T) {
-	apiVersion := scalev1alpha1.GroupVersion.String()
-	ref := func(apiVersion, kind string, controller bool) metav1.OwnerReference {
-		return metav1.OwnerReference{
-			APIVersion: apiVersion,
-			Kind:       kind,
-			Name:       "scale-3000-000000",
-			UID:        "instance-uid",
-			Controller: ptr.To(controller),
+	Describe("controllerOwnerKey", func() {
+		apiVersion := scalev1alpha1.GroupVersion.String()
+		ref := func(apiVersion, kind string, controller bool) metav1.OwnerReference {
+			return metav1.OwnerReference{
+				APIVersion: apiVersion,
+				Kind:       kind,
+				Name:       "scale-3000-000000",
+				UID:        "instance-uid",
+				Controller: ptr.To(controller),
+			}
 		}
-	}
-	for _, tc := range []struct {
-		name   string
-		obj    *corev1.Secret
-		want   types.NamespacedName
-		wantOK bool
-	}{
-		{
-			name:   "controller ref",
-			obj:    ownedSecret(ref(apiVersion, "SimInstance", true)),
-			want:   types.NamespacedName{Namespace: "fleet-ns", Name: "scale-3000-000000"},
-			wantOK: true,
-		},
-		{name: "wrong apiVersion", obj: ownedSecret(ref("scale.dpu.nvidia.com/v1", "SimInstance", true))},
-		{name: "wrong kind", obj: ownedSecret(ref(apiVersion, "SimFleet", true))},
-		{name: "no controller ref", obj: ownedSecret(ref(apiVersion, "SimInstance", false))},
-		{name: "no owner refs", obj: ownedSecret()},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := controllerOwnerKey(tc.obj, apiVersion, "SimInstance")
-			if ok != tc.wantOK || got != tc.want {
-				t.Fatalf("controllerOwnerKey() = (%v, %t), want (%v, %t)", got, ok, tc.want, tc.wantOK)
-			}
+
+		DescribeTable("resolves the controlling owner",
+			func(obj *corev1.Secret, want types.NamespacedName, wantOK bool) {
+				got, ok := controllerOwnerKey(obj, apiVersion, "SimInstance")
+				Expect(ok).To(Equal(wantOK))
+				Expect(got).To(Equal(want))
+			},
+			Entry("controller ref",
+				ownedSecret(ref(apiVersion, "SimInstance", true)),
+				types.NamespacedName{Namespace: "fleet-ns", Name: "scale-3000-000000"}, true),
+			Entry("wrong apiVersion",
+				ownedSecret(ref("scale.dpu.nvidia.com/v1", "SimInstance", true)), types.NamespacedName{}, false),
+			Entry("wrong kind", ownedSecret(ref(apiVersion, "SimFleet", true)), types.NamespacedName{}, false),
+			Entry("no controller ref", ownedSecret(ref(apiVersion, "SimInstance", false)), types.NamespacedName{}, false),
+			Entry("no owner refs", ownedSecret(), types.NamespacedName{}, false),
+		)
+	})
+
+	Describe("stripFinalizersAndForceDelete", func() {
+		var instance *scalev1alpha1.SimInstance
+
+		BeforeEach(func() {
+			instance = &scalev1alpha1.SimInstance{ObjectMeta: metav1.ObjectMeta{Name: "scale-3000-000000", Namespace: "fleet-ns"}}
 		})
-	}
-}
 
-func TestStripFinalizersAndForceDeleteRemovesObjectAndRecordsEvent(t *testing.T) {
-	ctx := context.Background()
-	scheme := instanceTestScheme(t)
-	instance := &scalev1alpha1.SimInstance{ObjectMeta: metav1.ObjectMeta{Name: "scale-3000-000000", Namespace: "fleet-ns"}}
-	secret := ownedSecret()
-	secret.Finalizers = []string{"x/y"}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-	recorder := events.NewFakeRecorder(10)
+		It("removes the object and records an Event", func(ctx SpecContext) {
+			secret := ownedSecret()
+			secret.Finalizers = []string{"x/y"}
+			c := fake.NewClientBuilder().WithScheme(instanceTestScheme()).WithObjects(secret).Build()
+			recorder := events.NewFakeRecorder(10)
 
-	err := stripFinalizersAndForceDelete(
-		ctx, c, recorder, instance, secret.DeepCopy(), "Secret", 0, lifecycleForceTimeout+time.Second,
-	)
-	if err != nil {
-		t.Fatalf("stripFinalizersAndForceDelete() = %v, want nil", err)
-	}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("Secret GET error = %v, want NotFound", err)
-	}
-	want := fmt.Sprintf(
-		"Warning LifecycleForceDelete stripped finalizers from Secret %s ordinal %d after %s",
-		secret.Name, 0, lifecycleForceTimeout,
-	)
-	select {
-	case got := <-recorder.Events:
-		if got != want {
-			t.Fatalf("Event = %q, want %q", got, want)
-		}
-	default:
-		t.Fatal("expected LifecycleForceDelete Event")
-	}
-	select {
-	case event := <-recorder.Events:
-		t.Fatalf("unexpected second Event %q", event)
-	default:
-	}
-}
+			Expect(stripFinalizersAndForceDelete(
+				ctx, c, recorder, instance, secret.DeepCopy(), "Secret", 0, lifecycleForceTimeout+time.Second,
+			)).To(Succeed())
+			err := c.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Secret GET error = %v, want NotFound", err)
+			want := fmt.Sprintf(
+				"Warning LifecycleForceDelete stripped finalizers from Secret %s ordinal %d after %s",
+				secret.Name, 0, lifecycleForceTimeout,
+			)
+			Expect(recorder.Events).To(Receive(Equal(want)))
+			Expect(recorder.Events).NotTo(Receive(), "unexpected second Event")
+		})
 
-func TestStripFinalizersAndForceDeleteToleratesGoneObject(t *testing.T) {
-	ctx := context.Background()
-	scheme := instanceTestScheme(t)
-	instance := &scalev1alpha1.SimInstance{ObjectMeta: metav1.ObjectMeta{Name: "scale-3000-000000", Namespace: "fleet-ns"}}
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	recorder := events.NewFakeRecorder(10)
+		It("tolerates an already-gone object", func(ctx SpecContext) {
+			c := fake.NewClientBuilder().WithScheme(instanceTestScheme()).Build()
+			recorder := events.NewFakeRecorder(10)
 
-	err := stripFinalizersAndForceDelete(
-		ctx, c, recorder, instance, ownedSecret(), "Secret", 0, lifecycleForceTimeout,
-	)
-	if err != nil {
-		t.Fatalf("stripFinalizersAndForceDelete() = %v, want nil", err)
-	}
-	select {
-	case event := <-recorder.Events:
-		t.Fatalf("unexpected Event %q for an already-gone object", event)
-	default:
-	}
-}
+			Expect(stripFinalizersAndForceDelete(
+				ctx, c, recorder, instance, ownedSecret(), "Secret", 0, lifecycleForceTimeout,
+			)).To(Succeed())
+			Expect(recorder.Events).NotTo(Receive(), "unexpected Event for an already-gone object")
+		})
 
-func TestStripFinalizersAndForceDeleteWithoutRecorder(t *testing.T) {
-	ctx := context.Background()
-	scheme := instanceTestScheme(t)
-	instance := &scalev1alpha1.SimInstance{ObjectMeta: metav1.ObjectMeta{Name: "scale-3000-000000", Namespace: "fleet-ns"}}
-	secret := ownedSecret()
-	secret.Finalizers = []string{"x/y"}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+		It("works without a recorder", func(ctx SpecContext) {
+			secret := ownedSecret()
+			secret.Finalizers = []string{"x/y"}
+			c := fake.NewClientBuilder().WithScheme(instanceTestScheme()).WithObjects(secret).Build()
 
-	if err := stripFinalizersAndForceDelete(
-		ctx, c, nil, instance, secret.DeepCopy(), "Secret", 0, lifecycleForceTimeout,
-	); err != nil {
-		t.Fatalf("stripFinalizersAndForceDelete() = %v, want nil", err)
-	}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("Secret GET error = %v, want NotFound", err)
-	}
-}
+			Expect(stripFinalizersAndForceDelete(
+				ctx, c, nil, instance, secret.DeepCopy(), "Secret", 0, lifecycleForceTimeout,
+			)).To(Succeed())
+			err := c.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Secret GET error = %v, want NotFound", err)
+		})
+	})
+})

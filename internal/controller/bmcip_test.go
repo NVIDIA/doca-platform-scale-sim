@@ -17,8 +17,8 @@ limitations under the License.
 package controller
 
 import (
-	"testing"
-
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	virtv1 "kubevirt.io/api/core/v1"
 )
@@ -30,59 +30,32 @@ func bmcVMI(name string, interfaces ...virtv1.VirtualMachineInstanceNetworkInter
 	}
 }
 
-func TestGuestBridgedIPv4(t *testing.T) {
-	tests := []struct {
-		name string
-		vmi  *virtv1.VirtualMachineInstance
-		want string
-	}{
-		{name: "no VMI", vmi: nil},
-		{name: "no interfaces", vmi: bmcVMI("vm")},
-		{
-			name: "the bridged default interface",
-			vmi: bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
-				Name: "default", IP: "10.1.2.3",
-			}),
-			want: "10.1.2.3",
+var _ = Describe("BMC address selection", func() {
+	DescribeTable("selects the BMC address a VMI publishes",
+		func(vmi *virtv1.VirtualMachineInstance, want string) {
+			Expect(guestBridgedIPv4(vmi)).To(Equal(want))
 		},
-		{
-			name: "another network is not the BMC",
-			vmi: bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
-				Name: "secondary", IP: "10.1.2.3",
-			}),
-		},
-		{
-			name: "the interface has not reported an address yet",
-			vmi: bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
-				Name: "default",
-			}),
-		},
-		{
-			// KubeVirt reports the SLIRP gateway for a VMI whose guest agent
-			// has not answered. DPF would dial the pod's own gateway.
-			name: "the masquerade gateway is never a BMC",
-			vmi: bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
-				Name: "default", IP: "10.0.2.2",
-			}),
-		},
-		{
-			name: "an IPv6 address is not a BMC address",
-			vmi: bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
-				Name: "default", IP: "fd10::3",
-			}),
-		},
-		{
-			name: "a malformed address is refused rather than published",
-			vmi: bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
-				Name: "default", IP: "not-an-address",
-			}),
-		},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := guestBridgedIPv4(testCase.vmi); got != testCase.want {
-				t.Fatalf("guestBridgedIPv4() = %q, want %q", got, testCase.want)
-			}
-		})
-	}
-}
+		Entry("no VMI", nil, ""),
+		Entry("no interfaces", bmcVMI("vm"), ""),
+		Entry("the bridged default interface", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
+			Name: "default", IP: "10.1.2.3",
+		}), "10.1.2.3"),
+		Entry("another network is not the BMC", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
+			Name: "secondary", IP: "10.1.2.3",
+		}), ""),
+		Entry("the interface has not reported an address yet", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
+			Name: "default",
+		}), ""),
+		// KubeVirt reports the SLIRP gateway for a VMI whose guest agent
+		// has not answered. DPF would dial the pod's own gateway.
+		Entry("the masquerade gateway is never a BMC", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
+			Name: "default", IP: "10.0.2.2",
+		}), ""),
+		Entry("an IPv6 address is not a BMC address", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
+			Name: "default", IP: "fd10::3",
+		}), ""),
+		Entry("a malformed address is refused rather than published", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
+			Name: "default", IP: "not-an-address",
+		}), ""),
+	)
+})

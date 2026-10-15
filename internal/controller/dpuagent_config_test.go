@@ -17,13 +17,11 @@ limitations under the License.
 package controller
 
 import (
-	"strings"
-	"testing"
-
 	mockconfig "github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/config"
 	"github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/redfish"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/equality"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
@@ -47,114 +45,6 @@ type renderedMockDPUAgentConfig struct {
 	} `json:"agent"`
 }
 
-func fleetWith(agent *scalev1alpha1.DPUAgentSpec) *scalev1alpha1.SimFleet {
-	fleet := &scalev1alpha1.SimFleet{
-		ObjectMeta: metav1.ObjectMeta{Name: "scale-3000", Namespace: "test-ns"},
-		Spec: scalev1alpha1.SimFleetSpec{
-			Replicas:              1,
-			DevicesPerDPUNode:     1,
-			DeviceSelectionLabels: map[string]string{"pool": "scale-3000"},
-		},
-	}
-	if agent != nil {
-		fleet.Spec.DPUAgent = agent
-	}
-	return fleet
-}
-
-func TestRenderMockDPUAgentConfigDefaults(t *testing.T) {
-	config, err := renderMockDPUAgentConfig(fleetWith(nil), "MT0000000000")
-	if err != nil {
-		t.Fatalf("renderMockDPUAgentConfig: %v", err)
-	}
-
-	var got renderedMockDPUAgentConfig
-	if err := yaml.Unmarshal([]byte(config), &got); err != nil {
-		t.Fatalf("unmarshal rendered config: %v\n%s", err, config)
-	}
-	if got.DPUType != "bf3" ||
-		got.BMC.SerialNumber != "MT0000000000" ||
-		got.BMC.Firmware.BMC != "BF-24.10-17" ||
-		got.BMC.Firmware.EROT != "mock-0.0" ||
-		got.BMC.Firmware.UEFI != "mock-0.0" ||
-		got.BMC.Firmware.NIC != "mock-0.0" ||
-		got.Agent.RebootMethod != "NoAction" ||
-		got.Agent.DPUClusterJoin != "kubelet" {
-		t.Fatalf("unexpected rendered config: %#v", got)
-	}
-}
-
-func TestRenderMockDPUAgentConfigDisabled(t *testing.T) {
-	disabled := false
-	config, err := renderMockDPUAgentConfig(
-		fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled}),
-		"MT0000000000",
-	)
-	if err != nil {
-		t.Fatalf("renderMockDPUAgentConfig: %v", err)
-	}
-	if config != "" {
-		t.Fatalf("disabled config = %q, want empty", config)
-	}
-}
-
-func TestRenderMockDPUAgentConfigOverrides(t *testing.T) {
-	bf4 := "bf4"
-	rebootMethod := "PowerCycle,SLR"
-	config, err := renderMockDPUAgentConfig(
-		fleetWith(&scalev1alpha1.DPUAgentSpec{
-			DPUType:      &bf4,
-			RebootMethod: &rebootMethod,
-		}),
-		"MT0000000042",
-	)
-	if err != nil {
-		t.Fatalf("renderMockDPUAgentConfig: %v", err)
-	}
-
-	var got renderedMockDPUAgentConfig
-	if err := yaml.Unmarshal([]byte(config), &got); err != nil {
-		t.Fatalf("unmarshal rendered config: %v\n%s", err, config)
-	}
-	if got.DPUType != "bf4" ||
-		got.BMC.SerialNumber != "MT0000000042" ||
-		got.Agent.RebootMethod != "PowerCycle,SLR" {
-		t.Fatalf("overrides not rendered: %#v", got)
-	}
-}
-
-func TestResolvedDPUAgentSpecDoesNotMutateFleet(t *testing.T) {
-	enabled := false
-	dpuType := "bf4"
-	rebootMethod := "PowerCycle"
-	fleet := fleetWith(&scalev1alpha1.DPUAgentSpec{
-		Enabled:      &enabled,
-		DPUType:      &dpuType,
-		RebootMethod: &rebootMethod,
-	})
-	before := fleet.DeepCopy()
-
-	_ = resolvedDPUAgentSpec(fleet)
-
-	if !equality.Semantic.DeepEqual(before, fleet) {
-		t.Fatal("resolvedDPUAgentSpec mutated the fleet object")
-	}
-}
-
-func TestDPUAgentEnabled(t *testing.T) {
-	if !dpuAgentEnabled(fleetWith(nil)) {
-		t.Fatal("nil dpuAgent defaults to enabled")
-	}
-	enabled := true
-	if !dpuAgentEnabled(fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &enabled})) {
-		t.Fatal("enabled true")
-	}
-	disabled := false
-	if dpuAgentEnabled(fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled})) {
-		t.Fatal("enabled false")
-	}
-}
-
 // An existing fleet has no bmc block. New ordinals of it must render the
 // bytes its older ordinals were created with.
 const unsetBMCMockDPUAgentConfig = `agent:
@@ -170,153 +60,189 @@ bmc:
 dpuType: bf3
 `
 
-func TestRenderMockDPUAgentConfigUnsetBMCIsUnchanged(t *testing.T) {
-	for name, agent := range map[string]*scalev1alpha1.DPUAgentSpec{
-		"no dpuAgent":    nil,
-		"empty dpuAgent": {},
-		"empty bmc":      {BMC: &scalev1alpha1.DPUAgentBMCSpec{}},
-		"empty firmware": {BMC: &scalev1alpha1.DPUAgentBMCSpec{Firmware: &scalev1alpha1.DPUAgentFirmware{}}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			config, err := renderMockDPUAgentConfig(fleetWith(agent), "MT0000000000")
-			if err != nil {
-				t.Fatalf("renderMockDPUAgentConfig: %v", err)
-			}
-			if config != unsetBMCMockDPUAgentConfig {
-				t.Fatalf("rendered config\ngot:\n%s\nwant:\n%s", config, unsetBMCMockDPUAgentConfig)
-			}
-		})
-	}
-}
-
 // startMock runs a rendered config through what mock-dpuagent does before it
 // serves: the strict parse, defaulting and validation of config.Load, then
 // the Redfish server construction that checks delay overrides against the
 // route table.
-func startMock(t *testing.T, agent *scalev1alpha1.DPUAgentSpec) *mockconfig.Config {
-	t.Helper()
+func startMock(agent *scalev1alpha1.DPUAgentSpec) *mockconfig.Config {
+	GinkgoHelper()
 	rendered, err := renderMockDPUAgentConfig(fleetWith(agent), "MT0000000000")
-	if err != nil {
-		t.Fatalf("renderMockDPUAgentConfig: %v", err)
-	}
-	cfg, err := mockconfig.Parse([]byte(rendered))
-	if err != nil {
-		t.Fatalf("mock refuses the rendered config: %v\n%s", err, rendered)
-	}
+	Expect(err).NotTo(HaveOccurred())
+	parsed, err := mockconfig.Parse([]byte(rendered))
+	Expect(err).NotTo(HaveOccurred(), "mock refuses the rendered config:\n%s", rendered)
 	var opts []redfish.ServerOption
-	if d := cfg.BMC.ResponseDelay; d != nil {
+	if d := parsed.BMC.ResponseDelay; d != nil {
 		opts = append(opts, redfish.WithResponseDelay(d.Range()))
 	}
-	if overrides := cfg.BMC.ResponseDelayOverrides; len(overrides) > 0 {
+	if overrides := parsed.BMC.ResponseDelayOverrides; len(overrides) > 0 {
 		opts = append(opts, redfish.WithResponseDelayOverrides(overrides))
 	}
-	if _, err := redfish.NewServer(nil, nil, opts...); err != nil {
-		t.Fatalf("mock Redfish server refuses the rendered config: %v\n%s", err, rendered)
-	}
-	return cfg
+	_, err = redfish.NewServer(nil, nil, opts...)
+	Expect(err).NotTo(HaveOccurred(), "mock Redfish server refuses the rendered config:\n%s", rendered)
+	return parsed
 }
 
-func renderBMC(t *testing.T, bmc *scalev1alpha1.DPUAgentBMCSpec) *mockconfig.Config {
-	t.Helper()
-	return startMock(t, &scalev1alpha1.DPUAgentSpec{BMC: bmc})
+func renderBMC(bmc *scalev1alpha1.DPUAgentBMCSpec) *mockconfig.Config {
+	GinkgoHelper()
+	return startMock(&scalev1alpha1.DPUAgentSpec{BMC: bmc})
 }
 
-func TestRenderedMockDPUAgentConfigStartsTheMock(t *testing.T) {
-	for name, agent := range map[string]*scalev1alpha1.DPUAgentSpec{
-		"defaults": nil,
-		"bf4":      {DPUType: ptr.To("bf4"), RebootMethod: ptr.To("PowerCycle,SLR")},
-		"every override form": {BMC: &scalev1alpha1.DPUAgentBMCSpec{
-			ResponseDelayOverrides: []scalev1alpha1.DPUAgentResponseDelayOverride{
-				{Name: "System", MaxSeconds: 2},
-				{Name: "SecureBoot", Methods: []string{"GET"}, MaxSeconds: 1},
-				{Name: "SecureBoot", Methods: []string{"PATCH"}, MaxSeconds: 3},
-				{Name: "UpdateService.SimpleUpdate", Methods: []string{"*"}, MinSeconds: 20, MaxSeconds: 30},
-			},
-		}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			startMock(t, agent)
+var _ = Describe("Mock DPU agent config", func() {
+	Describe("rendering", func() {
+		It("renders the defaults when the fleet has no dpuAgent", func() {
+			config, err := renderMockDPUAgentConfig(fleetWith(nil), "MT0000000000")
+			Expect(err).NotTo(HaveOccurred())
+
+			var got renderedMockDPUAgentConfig
+			Expect(yaml.Unmarshal([]byte(config), &got)).To(Succeed(), "rendered config:\n%s", config)
+			Expect(got.DPUType).To(Equal("bf3"))
+			Expect(got.BMC.SerialNumber).To(Equal("MT0000000000"))
+			Expect(got.BMC.Firmware.BMC).To(Equal("BF-24.10-17"))
+			Expect(got.BMC.Firmware.EROT).To(Equal("mock-0.0"))
+			Expect(got.BMC.Firmware.UEFI).To(Equal("mock-0.0"))
+			Expect(got.BMC.Firmware.NIC).To(Equal("mock-0.0"))
+			Expect(got.Agent.RebootMethod).To(Equal("NoAction"))
+			Expect(got.Agent.DPUClusterJoin).To(Equal("kubelet"))
 		})
-	}
-}
 
-// An unset firmware field renders the mock's own default, so the guest
-// reports exactly what a mock started without that field would.
-func TestRenderMockDPUAgentConfigFirmwareDefaultsAreTheMocks(t *testing.T) {
-	defaults, err := mockconfig.Parse([]byte("dpuType: bf3\nagent:\n  dpuClusterJoin: kubelet\n  rebootMethod: NoAction\n"))
-	if err != nil {
-		t.Fatalf("mockconfig.Parse: %v", err)
-	}
-	if got := startMock(t, nil).BMC.Firmware; got != defaults.BMC.Firmware {
-		t.Fatalf("rendered firmware = %+v, mock defaults = %+v", got, defaults.BMC.Firmware)
-	}
-}
+		It("renders an empty config when the agent is disabled", func() {
+			disabled := false
+			config, err := renderMockDPUAgentConfig(
+				fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled}),
+				"MT0000000000",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config).To(BeEmpty())
+		})
 
-func TestRenderMockDPUAgentConfigPartialFirmwareKeepsTheRest(t *testing.T) {
-	got := renderBMC(t, &scalev1alpha1.DPUAgentBMCSpec{
-		Firmware: &scalev1alpha1.DPUAgentFirmware{BMC: ptr.To("BF-24.07-10")},
-	})
-	fw := got.BMC.Firmware
-	if fw.BMC != "BF-24.07-10" || fw.ERoT != "mock-0.0" || fw.UEFI != "mock-0.0" || fw.NIC != "mock-0.0" {
-		t.Fatalf("firmware = %#v, want bmc overridden and the rest at mock-0.0", fw)
-	}
-}
+		It("renders dpuType and rebootMethod overrides", func() {
+			bf4 := "bf4"
+			rebootMethod := "PowerCycle,SLR"
+			config, err := renderMockDPUAgentConfig(
+				fleetWith(&scalev1alpha1.DPUAgentSpec{
+					DPUType:      &bf4,
+					RebootMethod: &rebootMethod,
+				}),
+				"MT0000000042",
+			)
+			Expect(err).NotTo(HaveOccurred())
 
-func TestRenderMockDPUAgentConfigBMCSettings(t *testing.T) {
-	got := renderBMC(t, &scalev1alpha1.DPUAgentBMCSpec{
-		PSID: ptr.To("MT_0000009999"),
-		Firmware: &scalev1alpha1.DPUAgentFirmware{
-			BMC: ptr.To("b"), ERoT: ptr.To("e"), UEFI: ptr.To("u"), NIC: ptr.To("n"),
-		},
-		ResponseDelay: &scalev1alpha1.DPUAgentResponseDelay{MinSeconds: 0, MaxSeconds: 1},
-		ResponseDelayOverrides: []scalev1alpha1.DPUAgentResponseDelayOverride{
-			{Name: "System", MinSeconds: 1, MaxSeconds: 2},
-			{Name: "SecureBoot", Methods: []string{"PATCH"}, MinSeconds: 5, MaxSeconds: 8},
-		},
-	})
+			var got renderedMockDPUAgentConfig
+			Expect(yaml.Unmarshal([]byte(config), &got)).To(Succeed(), "rendered config:\n%s", config)
+			Expect(got.DPUType).To(Equal("bf4"))
+			Expect(got.BMC.SerialNumber).To(Equal("MT0000000042"))
+			Expect(got.Agent.RebootMethod).To(Equal("PowerCycle,SLR"))
+		})
 
-	if got.BMC.PSID != "MT_0000009999" {
-		t.Errorf("psid = %q", got.BMC.PSID)
-	}
-	if fw := got.BMC.Firmware; fw.BMC != "b" || fw.ERoT != "e" || fw.UEFI != "u" || fw.NIC != "n" {
-		t.Errorf("firmware = %#v", fw)
-	}
-	if d := got.BMC.ResponseDelay; d == nil || d.MinSeconds != 0 || d.MaxSeconds != 1 {
-		t.Errorf("responseDelay = %#v, want 0..1", d)
-	}
-	overrides := got.BMC.ResponseDelayOverrides
-	if len(overrides) != 2 {
-		t.Fatalf("responseDelayOverrides = %#v, want 2 items", overrides)
-	}
-	if o := overrides[0]; o.Name != "System" || o.Methods != nil || o.MinSeconds != 1 || o.MaxSeconds != 2 {
-		t.Errorf("override[0] = %#v, want System with no methods, 1..2", o)
-	}
-	if o := overrides[1]; o.Name != "SecureBoot" || len(o.Methods) != 1 || o.Methods[0] != "PATCH" ||
-		o.MinSeconds != 5 || o.MaxSeconds != 8 {
-		t.Errorf("override[1] = %#v, want SecureBoot PATCH 5..8", o)
-	}
-}
-
-// A zero range is a real setting ("never delay this"), so it must still be
-// rendered rather than dropped as empty.
-func TestRenderMockDPUAgentConfigRendersZeroDelay(t *testing.T) {
-	config, err := renderMockDPUAgentConfig(fleetWith(&scalev1alpha1.DPUAgentSpec{
-		BMC: &scalev1alpha1.DPUAgentBMCSpec{
-			ResponseDelay: &scalev1alpha1.DPUAgentResponseDelay{},
-			ResponseDelayOverrides: []scalev1alpha1.DPUAgentResponseDelayOverride{
-				{Name: "Task"},
+		DescribeTable("renders the unchanged pre-bmc bytes when bmc is unset",
+			func(agent *scalev1alpha1.DPUAgentSpec) {
+				config, err := renderMockDPUAgentConfig(fleetWith(agent), "MT0000000000")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(config).To(Equal(unsetBMCMockDPUAgentConfig))
 			},
-		},
-	}), "MT0000000000")
-	if err != nil {
-		t.Fatalf("renderMockDPUAgentConfig: %v", err)
-	}
-	for _, want := range []string{
-		"  responseDelay:\n    maxSeconds: 0\n    minSeconds: 0\n",
-		"  - maxSeconds: 0\n    minSeconds: 0\n    name: Task\n",
-	} {
-		if !strings.Contains(config, want) {
-			t.Errorf("rendered config missing %q:\n%s", want, config)
-		}
-	}
-}
+			Entry("no dpuAgent", nil),
+			Entry("empty dpuAgent", &scalev1alpha1.DPUAgentSpec{}),
+			Entry("empty bmc", &scalev1alpha1.DPUAgentSpec{BMC: &scalev1alpha1.DPUAgentBMCSpec{}}),
+			Entry("empty firmware", &scalev1alpha1.DPUAgentSpec{
+				BMC: &scalev1alpha1.DPUAgentBMCSpec{Firmware: &scalev1alpha1.DPUAgentFirmware{}},
+			}),
+		)
+
+		DescribeTable("renders a config the mock starts with",
+			func(agent *scalev1alpha1.DPUAgentSpec) {
+				startMock(agent)
+			},
+			Entry("defaults", nil),
+			Entry("bf4", &scalev1alpha1.DPUAgentSpec{DPUType: ptr.To("bf4"), RebootMethod: ptr.To("PowerCycle,SLR")}),
+			Entry("every override form", &scalev1alpha1.DPUAgentSpec{BMC: &scalev1alpha1.DPUAgentBMCSpec{
+				ResponseDelayOverrides: []scalev1alpha1.DPUAgentResponseDelayOverride{
+					{Name: "System", MaxSeconds: 2},
+					{Name: "SecureBoot", Methods: []string{"GET"}, MaxSeconds: 1},
+					{Name: "SecureBoot", Methods: []string{"PATCH"}, MaxSeconds: 3},
+					{Name: "UpdateService.SimpleUpdate", Methods: []string{"*"}, MinSeconds: 20, MaxSeconds: 30},
+				},
+			}}),
+		)
+
+		// An unset firmware field renders the mock's own default, so the guest
+		// reports exactly what a mock started without that field would.
+		It("renders the mock's own firmware defaults for unset firmware", func() {
+			defaults, err := mockconfig.Parse([]byte("dpuType: bf3\nagent:\n  dpuClusterJoin: kubelet\n  rebootMethod: NoAction\n"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(startMock(nil).BMC.Firmware).To(Equal(defaults.BMC.Firmware))
+		})
+
+		It("keeps the other firmware defaults when only one firmware field is set", func() {
+			got := renderBMC(&scalev1alpha1.DPUAgentBMCSpec{
+				Firmware: &scalev1alpha1.DPUAgentFirmware{BMC: ptr.To("BF-24.07-10")},
+			})
+			Expect(got.BMC.Firmware).To(Equal(mockconfig.Firmware{
+				BMC: "BF-24.07-10", ERoT: "mock-0.0", UEFI: "mock-0.0", NIC: "mock-0.0",
+			}), "want bmc overridden and the rest at mock-0.0")
+		})
+
+		It("renders every bmc setting", func() {
+			got := renderBMC(&scalev1alpha1.DPUAgentBMCSpec{
+				PSID: ptr.To("MT_0000009999"),
+				Firmware: &scalev1alpha1.DPUAgentFirmware{
+					BMC: ptr.To("b"), ERoT: ptr.To("e"), UEFI: ptr.To("u"), NIC: ptr.To("n"),
+				},
+				ResponseDelay: &scalev1alpha1.DPUAgentResponseDelay{MinSeconds: 0, MaxSeconds: 1},
+				ResponseDelayOverrides: []scalev1alpha1.DPUAgentResponseDelayOverride{
+					{Name: "System", MinSeconds: 1, MaxSeconds: 2},
+					{Name: "SecureBoot", Methods: []string{"PATCH"}, MinSeconds: 5, MaxSeconds: 8},
+				},
+			})
+
+			Expect(got.BMC.PSID).To(Equal("MT_0000009999"))
+			Expect(got.BMC.Firmware).To(Equal(mockconfig.Firmware{BMC: "b", ERoT: "e", UEFI: "u", NIC: "n"}))
+			Expect(got.BMC.ResponseDelay).To(Equal(&mockconfig.ResponseDelay{MinSeconds: 0, MaxSeconds: 1}))
+			Expect(got.BMC.ResponseDelayOverrides).To(Equal([]mockconfig.ResponseDelayOverride{
+				{Name: "System", ResponseDelay: mockconfig.ResponseDelay{MinSeconds: 1, MaxSeconds: 2}},
+				{Name: "SecureBoot", Methods: []string{"PATCH"}, ResponseDelay: mockconfig.ResponseDelay{MinSeconds: 5, MaxSeconds: 8}},
+			}))
+		})
+
+		// A zero range is a real setting ("never delay this"), so it must still be
+		// rendered rather than dropped as empty.
+		It("renders a zero delay rather than dropping it", func() {
+			config, err := renderMockDPUAgentConfig(fleetWith(&scalev1alpha1.DPUAgentSpec{
+				BMC: &scalev1alpha1.DPUAgentBMCSpec{
+					ResponseDelay: &scalev1alpha1.DPUAgentResponseDelay{},
+					ResponseDelayOverrides: []scalev1alpha1.DPUAgentResponseDelayOverride{
+						{Name: "Task"},
+					},
+				},
+			}), "MT0000000000")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config).To(ContainSubstring("  responseDelay:\n    maxSeconds: 0\n    minSeconds: 0\n"))
+			Expect(config).To(ContainSubstring("  - maxSeconds: 0\n    minSeconds: 0\n    name: Task\n"))
+		})
+	})
+
+	Describe("spec resolution", func() {
+		It("does not mutate the fleet", func() {
+			enabled := false
+			dpuType := "bf4"
+			rebootMethod := "PowerCycle"
+			fleet := fleetWith(&scalev1alpha1.DPUAgentSpec{
+				Enabled:      &enabled,
+				DPUType:      &dpuType,
+				RebootMethod: &rebootMethod,
+			})
+			before := fleet.DeepCopy()
+
+			_ = resolvedDPUAgentSpec(fleet)
+
+			Expect(equality.Semantic.DeepEqual(before, fleet)).To(BeTrue(), "resolvedDPUAgentSpec mutated the fleet object")
+		})
+
+		It("reports the agent enabled unless it is explicitly disabled", func() {
+			Expect(dpuAgentEnabled(fleetWith(nil))).To(BeTrue(), "nil dpuAgent defaults to enabled")
+			enabled := true
+			Expect(dpuAgentEnabled(fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &enabled}))).To(BeTrue(), "enabled true")
+			disabled := false
+			Expect(dpuAgentEnabled(fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled}))).To(BeFalse(), "enabled false")
+		})
+	})
+})
