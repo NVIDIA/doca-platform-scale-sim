@@ -23,102 +23,41 @@ limitations under the License.
 package consistency
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/yaml"
 )
 
-func repoRoot(t *testing.T) string {
-	t.Helper()
+func repoRoot() string {
+	GinkgoHelper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatalf("Could not resolve the repository root: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("Resolved %q as the repository root, but it has no go.mod: %v", root, err)
-	}
+	Expect(err).NotTo(HaveOccurred(), "Could not resolve the repository root")
+	Expect(filepath.Join(root, "go.mod")).To(BeAnExistingFile(),
+		"Resolved %q as the repository root, but it has no go.mod", root)
 	return root
 }
 
-func readRepoFile(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), path))
-	if err != nil {
-		t.Fatalf("Could not read %s: %v", path, err)
-	}
+func readRepoFile(path string) string {
+	GinkgoHelper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(), path))
+	Expect(err).NotTo(HaveOccurred(), "Could not read %s", path)
 	return string(data)
 }
 
-func TestManagerRBACCoversCredentialDelegation(t *testing.T) {
-	data := readRepoFile(t, "config/rbac/role.yaml")
+func loadManagerRole() *rbacv1.ClusterRole {
+	GinkgoHelper()
 	role := &rbacv1.ClusterRole{}
-	if err := yaml.Unmarshal([]byte(data), role); err != nil {
-		t.Fatalf("Could not decode manager Role: %v", err)
-	}
-
-	// Kubernetes refuses to create a Role granting more than its creator
-	// holds, so every verb the per-ordinal Role delegates has to appear here.
-	required := []struct {
-		group    string
-		resource string
-		verbs    []string
-	}{
-		{group: "", resource: "secrets", verbs: []string{"get"}},
-		{group: "", resource: "serviceaccounts", verbs: []string{"create", "delete", "get", "patch"}},
-		{group: "", resource: "serviceaccounts/token", verbs: []string{"create"}},
-		{group: "events.k8s.io", resource: "events", verbs: []string{"create", "patch"}},
-		{group: "provisioning.dpu.nvidia.com", resource: "dpus", verbs: []string{"delete", "get", "patch"}},
-		{group: "kubevirt.io", resource: "virtualmachineinstances", verbs: []string{"delete", "patch"}},
-		{group: rbacv1.GroupName, resource: "roles", verbs: []string{"create", "delete", "get", "list", "patch"}},
-		{group: rbacv1.GroupName, resource: "rolebindings", verbs: []string{"create", "delete", "get", "patch"}},
-	}
-	for _, permission := range required {
-		for _, verb := range permission.verbs {
-			if !clusterRoleAllows(role.Rules, permission.group, permission.resource, verb) {
-				t.Errorf("manager Role lacks %s %s/%s required for per-DPU credentials",
-					verb, permission.group, permission.resource)
-			}
-		}
-	}
-	// The guest credential no longer patches DPU status or reads the trust
-	// bundle, so the manager has no reason to hold either. Keeping a
-	// delegation the guest cannot use is how a narrowed Role quietly widens
-	// again.
-	for _, withdrawn := range []struct {
-		group    string
-		resource string
-		verb     string
-	}{
-		{group: "", resource: "configmaps", verb: "get"},
-		{group: "provisioning.dpu.nvidia.com", resource: "dpus/status", verb: "patch"},
-	} {
-		if clusterRoleAllows(role.Rules, withdrawn.group, withdrawn.resource, withdrawn.verb) {
-			t.Errorf("manager Role still grants %s %s/%s, which nothing delegates any more",
-				withdrawn.verb, withdrawn.group, withdrawn.resource)
-		}
-	}
-	for _, rule := range role.Rules {
-		for _, verb := range rule.Verbs {
-			if verb == "escalate" || verb == "bind" {
-				t.Errorf("manager Role must not grant %q", verb)
-			}
-		}
-	}
-	// The credential kinds are cached through an informer scoped to the
-	// fleet label, which needs list and watch.
-	for _, resource := range []string{"serviceaccounts", "roles", "rolebindings"} {
-		for _, verb := range []string{"list", "watch"} {
-			if !clusterRoleAllows(role.Rules, credentialResourceGroup(resource), resource, verb) {
-				t.Errorf("manager Role lacks %s on label-cached resource %s", verb, resource)
-			}
-		}
-	}
+	Expect(yaml.Unmarshal([]byte(readRepoFile("config/rbac/role.yaml")), role)).To(Succeed(),
+		"Could not decode manager Role")
+	return role
 }
 
 func clusterRoleAllows(rules []rbacv1.PolicyRule, group, resource, verb string) bool {
@@ -160,49 +99,110 @@ var watchedTypeResources = map[string]struct{ group, resource string }{
 	"SimFleet":               {"scale.dpu.nvidia.com", "simfleets"},
 }
 
-// TestWatchedResourcesHaveListAndWatchRBAC catches a watch the manager cannot
-// actually run. Owns and Watches both build a cache informer, which LISTs and
-// WATCHes cluster-wide before the controller starts; without those verbs the
-// cache never syncs and the manager hangs at startup without ever reconciling.
-// envtest cannot catch it because its client is cluster-admin, so the only
-// cheap guard is reading the manifest the deployment actually uses.
-//
-// Every reconciler's SetupWithManager is checked, since each one's watches
-// run in the same manager under the same Role.
-func TestWatchedResourcesHaveListAndWatchRBAC(t *testing.T) {
-	role := &rbacv1.ClusterRole{}
-	if err := yaml.Unmarshal([]byte(readRepoFile(t,
-		"config/rbac/role.yaml")), role); err != nil {
-		t.Fatalf("Could not decode manager Role: %v", err)
-	}
+var _ = Describe("Manager RBAC", func() {
+	It("covers every verb the per-DPU credentials delegate", func() {
+		role := loadManagerRole()
+		var problems []string
 
-	for file, reconciler := range map[string]string{
-		"simfleet_controller.go":    "SimFleetReconciler",
-		"siminstance_controller.go": "SimInstanceReconciler",
-	} {
-		source := readRepoFile(t, "internal/controller/"+file)
-		start := strings.Index(source, "func (r *"+reconciler+") SetupWithManager")
-		if start < 0 {
-			t.Fatalf("%s has no %s.SetupWithManager", file, reconciler)
+		// Kubernetes refuses to create a Role granting more than its creator
+		// holds, so every verb the per-ordinal Role delegates has to appear here.
+		required := []struct {
+			group    string
+			resource string
+			verbs    []string
+		}{
+			{group: "", resource: "secrets", verbs: []string{"get"}},
+			{group: "", resource: "serviceaccounts", verbs: []string{"create", "delete", "get", "patch"}},
+			{group: "", resource: "serviceaccounts/token", verbs: []string{"create"}},
+			{group: "events.k8s.io", resource: "events", verbs: []string{"create", "patch"}},
+			{group: "provisioning.dpu.nvidia.com", resource: "dpus", verbs: []string{"delete", "get", "patch"}},
+			{group: "kubevirt.io", resource: "virtualmachineinstances", verbs: []string{"delete", "patch"}},
+			{group: rbacv1.GroupName, resource: "roles", verbs: []string{"create", "delete", "get", "list", "patch"}},
+			{group: rbacv1.GroupName, resource: "rolebindings", verbs: []string{"create", "delete", "get", "patch"}},
 		}
-		matches := watchRegistration.FindAllStringSubmatch(source[start:], -1)
-		if len(matches) == 0 {
-			t.Fatalf("%s.SetupWithManager registers no watches; the regexp or the body changed", reconciler)
-		}
-		for _, match := range matches {
-			typeName := match[1]
-			rule, known := watchedTypeResources[typeName]
-			if !known {
-				t.Errorf("%s.SetupWithManager watches %s, which has no known RBAC rule; "+
-					"add it to watchedTypeResources after granting list and watch", reconciler, typeName)
-				continue
-			}
-			for _, verb := range []string{"list", "watch"} {
-				if !clusterRoleAllows(role.Rules, rule.group, rule.resource, verb) {
-					t.Errorf("%s.SetupWithManager watches %s but the manager Role does not grant "+
-						"%s %s/%s; the cache would never sync", reconciler, typeName, verb, rule.group, rule.resource)
+		for _, permission := range required {
+			for _, verb := range permission.verbs {
+				if !clusterRoleAllows(role.Rules, permission.group, permission.resource, verb) {
+					problems = append(problems, fmt.Sprintf("manager Role lacks %s %s/%s required for per-DPU credentials",
+						verb, permission.group, permission.resource))
 				}
 			}
 		}
-	}
-}
+		// The guest credential no longer patches DPU status or reads the trust
+		// bundle, so the manager has no reason to hold either. Keeping a
+		// delegation the guest cannot use is how a narrowed Role quietly widens
+		// again.
+		for _, withdrawn := range []struct {
+			group    string
+			resource string
+			verb     string
+		}{
+			{group: "", resource: "configmaps", verb: "get"},
+			{group: "provisioning.dpu.nvidia.com", resource: "dpus/status", verb: "patch"},
+		} {
+			if clusterRoleAllows(role.Rules, withdrawn.group, withdrawn.resource, withdrawn.verb) {
+				problems = append(problems, fmt.Sprintf("manager Role still grants %s %s/%s, which nothing delegates any more",
+					withdrawn.verb, withdrawn.group, withdrawn.resource))
+			}
+		}
+		for _, rule := range role.Rules {
+			for _, verb := range rule.Verbs {
+				if verb == "escalate" || verb == "bind" {
+					problems = append(problems, fmt.Sprintf("manager Role must not grant %q", verb))
+				}
+			}
+		}
+		// The credential kinds are cached through an informer scoped to the
+		// fleet label, which needs list and watch.
+		for _, resource := range []string{"serviceaccounts", "roles", "rolebindings"} {
+			for _, verb := range []string{"list", "watch"} {
+				if !clusterRoleAllows(role.Rules, credentialResourceGroup(resource), resource, verb) {
+					problems = append(problems, fmt.Sprintf("manager Role lacks %s on label-cached resource %s", verb, resource))
+				}
+			}
+		}
+		Expect(problems).To(BeEmpty())
+	})
+
+	// This catches a watch the manager cannot actually run. Owns and Watches
+	// both build a cache informer, which LISTs and WATCHes cluster-wide before
+	// the controller starts; without those verbs the cache never syncs and the
+	// manager hangs at startup without ever reconciling. envtest cannot catch
+	// it because its client is cluster-admin, so the only cheap guard is reading
+	// the manifest the deployment actually uses.
+	//
+	// Every reconciler's SetupWithManager is checked, since each one's watches
+	// run in the same manager under the same Role.
+	It("grants list and watch on every watched resource", func() {
+		role := loadManagerRole()
+		var problems []string
+
+		for file, reconciler := range map[string]string{
+			"simfleet_controller.go":    "SimFleetReconciler",
+			"siminstance_controller.go": "SimInstanceReconciler",
+		} {
+			source := readRepoFile("internal/controller/" + file)
+			start := strings.Index(source, "func (r *"+reconciler+") SetupWithManager")
+			Expect(start).To(BeNumerically(">=", 0), "%s has no %s.SetupWithManager", file, reconciler)
+			matches := watchRegistration.FindAllStringSubmatch(source[start:], -1)
+			Expect(matches).NotTo(BeEmpty(),
+				"%s.SetupWithManager registers no watches; the regexp or the body changed", reconciler)
+			for _, match := range matches {
+				typeName := match[1]
+				rule, known := watchedTypeResources[typeName]
+				if !known {
+					problems = append(problems, fmt.Sprintf("%s.SetupWithManager watches %s, which has no known RBAC rule; "+
+						"add it to watchedTypeResources after granting list and watch", reconciler, typeName))
+					continue
+				}
+				for _, verb := range []string{"list", "watch"} {
+					if !clusterRoleAllows(role.Rules, rule.group, rule.resource, verb) {
+						problems = append(problems, fmt.Sprintf("%s.SetupWithManager watches %s but the manager Role does not grant "+
+							"%s %s/%s; the cache would never sync", reconciler, typeName, verb, rule.group, rule.resource))
+					}
+				}
+			}
+		}
+		Expect(problems).To(BeEmpty())
+	})
+})

@@ -37,6 +37,57 @@ import (
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
 )
 
+// newEnvtestInstance is ordinal 0 of fleet, controlled by it.
+func newEnvtestInstance(fleet *scalev1alpha1.SimFleet) *scalev1alpha1.SimInstance {
+	GinkgoHelper()
+	instance := &scalev1alpha1.SimInstance{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.InstanceName(fleet.Name, 0),
+			Namespace: fleet.Namespace,
+		},
+		Spec: scalev1alpha1.SimInstanceSpec{Ordinal: 0, HostIndex: 0},
+	}
+	Expect(controllerutil.SetControllerReference(fleet, instance, scheme.Scheme)).To(Succeed())
+	return instance
+}
+
+// configureKubelet stands in for the DPU agent: it reports the kubelet
+// configured on dpu's status.
+func configureKubelet(dpu *provisioningv1.DPU) {
+	GinkgoHelper()
+	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(dpu), dpu)).To(Succeed())
+	dpu.Status.AgentStatus = &provisioningv1.AgentStatus{}
+	meta.SetStatusCondition(&dpu.Status.AgentStatus.Conditions, metav1.Condition{
+		Type:    "KubeletConfigured",
+		Status:  metav1.ConditionTrue,
+		Reason:  "Configured",
+		Message: "kubelet is configured",
+	})
+	Expect(k8sClient.Status().Update(ctx, dpu)).To(Succeed())
+}
+
+// provisionDPU stands in for DPF: it creates the DPU its DPUSet would for the
+// ordinal's device, with the kubelet not configured yet.
+func provisionDPU(fleet *scalev1alpha1.SimFleet, ordinal int) *provisioningv1.DPU {
+	GinkgoHelper()
+	dpu := &provisioningv1.DPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal),
+			Namespace: fleet.Namespace,
+		},
+		Spec: provisioningv1.DPUSpec{
+			DPUNodeName:   utils.NodeName(fleet.Name, utils.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode)),
+			DPUDeviceName: utils.DeviceName(fleet.Name, ordinal),
+			BFB:           ptr.To("bfb"),
+			SerialNumber:  utils.SerialNumber(fleet.Name, ordinal),
+			NodeEffect:    provisioningv1.NodeEffect{Action: provisioningv1.Action{NoEffect: ptr.To(true)}},
+			DPUFlavor:     "flavor",
+		},
+	}
+	Expect(k8sClient.Create(ctx, dpu)).To(Succeed())
+	return dpu
+}
+
 var _ = Describe("SimInstance reconciler", func() {
 	var (
 		fleet    *scalev1alpha1.SimFleet
@@ -149,88 +200,6 @@ var _ = Describe("SimInstance spec admission", func() {
 		Entry("spec.hostIndex", func(spec *scalev1alpha1.SimInstanceSpec) { spec.HostIndex = 1 }, "hostIndex is immutable"),
 	)
 })
-
-// newEnvtestInstance is ordinal 0 of fleet, controlled by it.
-func newEnvtestInstance(fleet *scalev1alpha1.SimFleet) *scalev1alpha1.SimInstance {
-	GinkgoHelper()
-	instance := &scalev1alpha1.SimInstance{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.InstanceName(fleet.Name, 0),
-			Namespace: fleet.Namespace,
-		},
-		Spec: scalev1alpha1.SimInstanceSpec{Ordinal: 0, HostIndex: 0},
-	}
-	Expect(controllerutil.SetControllerReference(fleet, instance, scheme.Scheme)).To(Succeed())
-	return instance
-}
-
-// configureKubelet stands in for the DPU agent: it reports the kubelet
-// configured on dpu's status.
-func configureKubelet(dpu *provisioningv1.DPU) {
-	GinkgoHelper()
-	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(dpu), dpu)).To(Succeed())
-	dpu.Status.AgentStatus = &provisioningv1.AgentStatus{}
-	meta.SetStatusCondition(&dpu.Status.AgentStatus.Conditions, metav1.Condition{
-		Type:    "KubeletConfigured",
-		Status:  metav1.ConditionTrue,
-		Reason:  "Configured",
-		Message: "kubelet is configured",
-	})
-	Expect(k8sClient.Status().Update(ctx, dpu)).To(Succeed())
-}
-
-// bootGuest stands in for KubeVirt, which envtest does not run: it creates
-// the VMI the VirtualMachine would run, with a bridged address and Ready.
-// The VMI CRD has no status subresource, so the status is written on create.
-func bootGuest(vm *virtv1.VirtualMachine, address string) *virtv1.VirtualMachineInstance {
-	GinkgoHelper()
-	vmi := &virtv1.VirtualMachineInstance{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      vm.Name,
-			Namespace: vm.Namespace,
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: virtv1.GroupVersion.String(),
-				Kind:       "VirtualMachine",
-				Name:       vm.Name,
-				UID:        vm.UID,
-				Controller: ptr.To(true),
-			}},
-		},
-		Spec: virtv1.VirtualMachineInstanceSpec{Domain: virtv1.DomainSpec{Devices: virtv1.Devices{}}},
-		Status: virtv1.VirtualMachineInstanceStatus{
-			Phase:      virtv1.Running,
-			Interfaces: []virtv1.VirtualMachineInstanceNetworkInterface{{Name: bridgedNetworkName, IP: address}},
-			Conditions: []virtv1.VirtualMachineInstanceCondition{{
-				Type:   virtv1.VirtualMachineInstanceReady,
-				Status: corev1.ConditionTrue,
-			}},
-		},
-	}
-	Expect(k8sClient.Create(ctx, vmi)).To(Succeed())
-	return vmi
-}
-
-// provisionDPU stands in for DPF: it creates the DPU its DPUSet would for the
-// ordinal's device, with the kubelet not configured yet.
-func provisionDPU(fleet *scalev1alpha1.SimFleet, ordinal int) *provisioningv1.DPU {
-	GinkgoHelper()
-	dpu := &provisioningv1.DPU{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal),
-			Namespace: fleet.Namespace,
-		},
-		Spec: provisioningv1.DPUSpec{
-			DPUNodeName:   utils.NodeName(fleet.Name, utils.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode)),
-			DPUDeviceName: utils.DeviceName(fleet.Name, ordinal),
-			BFB:           ptr.To("bfb"),
-			SerialNumber:  utils.SerialNumber(fleet.Name, ordinal),
-			NodeEffect:    provisioningv1.NodeEffect{Action: provisioningv1.Action{NoEffect: ptr.To(true)}},
-			DPUFlavor:     "flavor",
-		},
-	}
-	Expect(k8sClient.Create(ctx, dpu)).To(Succeed())
-	return dpu
-}
 
 var _ = Describe("SimInstance readiness", func() {
 	var fleet *scalev1alpha1.SimFleet

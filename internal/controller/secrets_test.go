@@ -17,14 +17,14 @@ limitations under the License.
 package controller
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/clientcmd"
@@ -72,20 +72,16 @@ func mapKeys(m map[string]any) []string {
 	return keys
 }
 
-func assertCloudConfigTopLevelKeys(t *testing.T, userdata string) {
-	t.Helper()
+func assertCloudConfigTopLevelKeys(userdata string) {
+	GinkgoHelper()
 
 	var raw map[string]any
-	if err := yaml.Unmarshal([]byte(userdata), &raw); err != nil {
-		t.Fatalf("parse userdata as map: %v\n%s", err, userdata)
-	}
+	Expect(yaml.Unmarshal([]byte(userdata), &raw)).To(Succeed(), "parse userdata as map:\n%s", userdata)
 	// runcmd is absent for an enabled guest and present only to mask units
 	// for a disabled one, so it is optional rather than expected.
 	want := []string{"chpasswd", "hostname", "ssh_pwauth", "users", "write_files"}
 	got := slices.DeleteFunc(mapKeys(raw), func(key string) bool { return key == "runcmd" })
-	if !slices.Equal(got, want) {
-		t.Fatalf("top-level keys %v want %v plus an optional runcmd", got, want)
-	}
+	Expect(got).To(Equal(want), "top-level keys, plus an optional runcmd")
 }
 
 func secretDataKeys(data map[string][]byte) []string {
@@ -97,11 +93,9 @@ func secretDataKeys(data map[string][]byte) []string {
 	return keys
 }
 
-func assertForbiddenCloudInitContent(t *testing.T, userdata string) {
-	t.Helper()
-	if err := validateForbiddenCloudInitContent(userdata); err != nil {
-		t.Fatal(err)
-	}
+func assertForbiddenCloudInitContent(userdata string) {
+	GinkgoHelper()
+	Expect(validateForbiddenCloudInitContent(userdata)).To(Succeed())
 }
 
 func validateForbiddenCloudInitContent(userdata string) error {
@@ -227,475 +221,334 @@ func validateLimitedManagementKubeconfig(data []byte) error {
 	return nil
 }
 
-func TestDesiredCloudInitSecret(t *testing.T) {
-	fleet := &scalev1alpha1.SimFleet{
-		ObjectMeta: metav1.ObjectMeta{Name: "scale-3000", Namespace: "fleet-ns", UID: "uid"},
-		Spec: scalev1alpha1.SimFleetSpec{
-			Replicas:          3000,
-			DevicesPerDPUNode: 10,
-			Bootstrap: &scalev1alpha1.BootstrapSpec{
-				DPUClusterRef: scalev1alpha1.DPUClusterReference{Name: "tenant1", Namespace: "dpf-ns"},
-			},
-		},
-	}
-	const ordinal = 12
-	kubeconfig, err := managementKubeconfig(
-		[]byte("test-management-token"),
-		[]byte("test-management-ca"),
-	)
-	if err != nil {
-		t.Fatalf("managementKubeconfig: %v", err)
-	}
-	secret, err := desiredCloudInitSecret(fleet, ordinal, kubeconfig)
-	if err != nil {
-		t.Fatalf("desiredCloudInitSecret: %v", err)
-	}
-	if secret.Type != corev1.SecretTypeOpaque {
-		t.Fatalf("type %q", secret.Type)
-	}
-	if got := secretDataKeys(secret.Data); len(got) != 1 || got[0] != "userdata" {
-		t.Fatalf("data keys %v", got)
-	}
-	ud := string(secret.Data["userdata"])
-	assertForbiddenCloudInitContent(t, ud)
-	assertCloudConfigTopLevelKeys(t, ud)
-
-	var cfg cloudConfig
-	if err := yaml.Unmarshal([]byte(ud), &cfg); err != nil {
-		t.Fatalf("parse userdata: %v\n%s", err, ud)
-	}
-	if cfg.Hostname != "scale-3000-dpu-000012" {
-		t.Fatalf("hostname %q", cfg.Hostname)
-	}
-	assertCloudInitDebugUser(t, cfg)
-	if len(cfg.WriteFiles) != 3 {
-		t.Fatalf("write_files len %d", len(cfg.WriteFiles))
-	}
-	identity := cfg.WriteFiles[0]
-	if identity.Path != dpuIdentityPath {
-		t.Fatalf("identity path %q", identity.Path)
-	}
-	if identity.Permissions != "0600" {
-		t.Fatalf("identity permissions %q", identity.Permissions)
-	}
-	// Every line is derived from the fleet and the ordinal. Nothing here can
-	// come from a DPU object, because none exists when this Secret is written.
-	wantIdentity := strings.Join([]string{
-		"DPU_NAME=scale-3000-host-0001-scale-3000-device-000012",
-		"DPU_NAMESPACE=fleet-ns",
-		"DPU_NODE_NAME=scale-3000-host-0001",
-		"DPU_DEVICE_NAME=scale-3000-device-000012",
-		"DPU_CLUSTER_NAME=tenant1",
-		"DPU_CLUSTER_NAMESPACE=dpf-ns",
-	}, "\n") + "\n"
-	if identity.Content != wantIdentity {
-		t.Fatalf("identity content\ngot:  %q\nwant: %q", identity.Content, wantIdentity)
-	}
-	conf := cfg.WriteFiles[1]
-	if conf.Path != dpuAgentConfPath || conf.Permissions != "0600" {
-		t.Fatalf("dpuagent conf file = %#v", conf)
-	}
-	wantConf, err := renderMockDPUAgentConfig(fleet, utils.SerialNumber(fleet.Name, ordinal))
-	if err != nil {
-		t.Fatalf("renderMockDPUAgentConfig: %v", err)
-	}
-	if conf.Content != wantConf {
-		t.Fatalf("dpuagent conf content\ngot:  %q\nwant: %q", conf.Content, wantConf)
-	}
-	management := cfg.WriteFiles[2]
-	if management.Path != dpuAgentKubeconfigPath || management.Permissions != "0600" {
-		t.Fatalf("management kubeconfig file = %#v", management)
-	}
-	if management.Content != string(kubeconfig) {
-		t.Fatalf("management kubeconfig content\ngot:  %q\nwant: %q", management.Content, kubeconfig)
-	}
-	// Both units are baked into the image and enabled there; an enabled
-	// guest must neither run commands nor name a unit it does not own.
-	if len(cfg.Runcmd) != 0 {
-		t.Fatalf("runcmd = %#v, want none", cfg.Runcmd)
-	}
-	for _, unit := range []string{waitKubeletJoinUnit, mockDPUAgentUnit} {
-		if strings.Contains(ud, unit) {
-			t.Fatalf("enabled cloud-init userdata mentions %q:\n%s", unit, ud)
-		}
-	}
-	if secret.Labels[labelOrdinal] != "000012" {
-		t.Fatalf("ordinal label %q", secret.Labels[labelOrdinal])
-	}
-	if secret.Labels[labelFleetUID] != "uid" {
-		t.Fatalf("fleet uid label %q", secret.Labels[labelFleetUID])
-	}
-	if len(secret.Data["userdata"]) >= maxCloudInitUserdataBytes {
-		t.Fatalf("userdata size = %d, want less than %d", len(secret.Data["userdata"]), maxCloudInitUserdataBytes)
-	}
-}
-
-func TestCloudInitUserdataRejectsMissingDependencies(t *testing.T) {
-	if _, err := cloudInitUserdata(nil, 0, []byte("kubeconfig")); err == nil {
-		t.Fatal("cloudInitUserdata accepted a nil SimFleet")
-	}
-	for _, kubeconfig := range [][]byte{nil, {}} {
-		secret, err := desiredCloudInitSecret(fleetWith(nil), 3, kubeconfig)
-		if err == nil || secret != nil {
-			t.Fatalf("desiredCloudInitSecret accepted an empty management kubeconfig %#v", kubeconfig)
-		}
-		if !strings.Contains(err.Error(), "ordinal 3") || !strings.Contains(err.Error(), "empty") {
-			t.Fatalf("error does not name the empty kubeconfig and ordinal: %v", err)
-		}
-	}
-}
-
-func TestDPUIdentityContentWithoutBootstrap(t *testing.T) {
-	lines := strings.Split(dpuIdentityContent(fleetWith(nil), 0), "\n")
-	if lines[len(lines)-1] != "" {
-		t.Fatalf("identity content does not end with a newline: %q", lines)
-	}
-	lines = lines[:len(lines)-1]
-	if len(lines) != 6 {
-		t.Fatalf("identity lines %q, want 6", lines)
-	}
-	if lines[4] != "DPU_CLUSTER_NAME=" || lines[5] != "DPU_CLUSTER_NAMESPACE=" {
-		t.Fatalf("cluster lines %q, want empty values", lines[4:])
-	}
-}
-
-func TestDesiredCloudInitSecretDisabledOmitsAgentDependenciesAndMasksService(t *testing.T) {
-	disabled := false
-	fleet := fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled})
-	fleet.UID = "fleet-uid"
-	secret, err := desiredCloudInitSecret(fleet, 0, nil)
-	if err != nil {
-		t.Fatalf("desiredCloudInitSecret: %v", err)
-	}
-	userdata := string(secret.Data["userdata"])
-	assertForbiddenCloudInitContent(t, userdata)
-	assertCloudConfigTopLevelKeys(t, userdata)
-
-	var cfg cloudConfig
-	if err := yaml.Unmarshal([]byte(userdata), &cfg); err != nil {
-		t.Fatalf("parse userdata: %v\n%s", err, userdata)
-	}
-	if len(cfg.WriteFiles) != 1 || cfg.WriteFiles[0].Path != dpuIdentityPath {
-		t.Fatalf("disabled write_files = %#v", cfg.WriteFiles)
-	}
-	// Without a credential the join helper would fail on a loop, so both
-	// baked units must be masked, and persistently so (see cloudInitUserdata).
-	for _, unit := range []string{mockDPUAgentUnit, waitKubeletJoinUnit} {
-		if !slices.Contains(cfg.Runcmd, "systemctl mask --now "+unit) {
-			t.Fatalf("disabled runcmd does not persistently mask %s: %#v", unit, cfg.Runcmd)
-		}
-	}
-	for _, command := range cfg.Runcmd {
-		if strings.Contains(command, "systemctl mask") &&
-			strings.Contains(command, "--runtime") {
-			t.Fatalf("runcmd masks a unit only for this boot: %q", command)
-		}
-	}
-	assertCloudInitDebugUser(t, cfg)
-}
-
-func assertCloudInitDebugUser(t *testing.T, cfg cloudConfig) {
-	t.Helper()
-	if !cfg.SSHPwauth {
-		t.Fatal("ssh_pwauth is false")
-	}
-	if cfg.Chpasswd.Expire {
-		t.Fatal("chpasswd.expire is true")
-	}
+func assertCloudInitDebugUser(cfg cloudConfig) {
+	GinkgoHelper()
+	Expect(cfg.SSHPwauth).To(BeTrue(), "ssh_pwauth")
+	Expect(cfg.Chpasswd.Expire).To(BeFalse(), "chpasswd.expire")
 	wantPasswd := cloudInitDebugUser + ":" + cloudInitDebugPassword
-	if strings.TrimSpace(cfg.Chpasswd.List) != wantPasswd {
-		t.Fatalf("chpasswd.list %q want %q", cfg.Chpasswd.List, wantPasswd)
-	}
-	if len(cfg.Users) != 1 {
-		t.Fatalf("users %#v", cfg.Users)
-	}
+	Expect(strings.TrimSpace(cfg.Chpasswd.List)).To(Equal(wantPasswd), "chpasswd.list")
+	Expect(cfg.Users).To(HaveLen(1))
 	user := cfg.Users[0]
-	if user.Name != cloudInitDebugUser {
-		t.Fatalf("user name %q", user.Name)
-	}
-	if user.LockPasswd == nil || *user.LockPasswd {
-		t.Fatalf("lock_passwd %#v", user.LockPasswd)
-	}
-	if user.Sudo != "ALL=(ALL) NOPASSWD:ALL" {
-		t.Fatalf("sudo %q", user.Sudo)
-	}
-	if user.Groups != "sudo" {
-		t.Fatalf("groups %q", user.Groups)
-	}
-	if user.Shell != "/bin/bash" {
-		t.Fatalf("shell %q", user.Shell)
-	}
+	Expect(user.Name).To(Equal(cloudInitDebugUser), "user name")
+	Expect(user.LockPasswd).To(HaveValue(BeFalse()), "lock_passwd")
+	Expect(user.Sudo).To(Equal("ALL=(ALL) NOPASSWD:ALL"), "sudo")
+	Expect(user.Groups).To(Equal("sudo"), "groups")
+	Expect(user.Shell).To(Equal("/bin/bash"), "shell")
 }
 
-func TestDesiredCloudInitSecretRejectsOversizeWithoutLeakingCredentials(t *testing.T) {
-	const credentialMarker = "do-not-leak-management-credential"
-	kubeconfig := []byte(strings.Repeat(credentialMarker, maxCloudInitUserdataBytes))
-	secret, err := desiredCloudInitSecret(fleetWith(nil), 7, kubeconfig)
-	if err == nil {
-		t.Fatal("desiredCloudInitSecret returned nil error")
-	}
-	if secret != nil {
-		t.Fatal("desiredCloudInitSecret returned a Secret for oversized userdata")
-	}
-	if !strings.Contains(err.Error(), "ordinal 7") {
-		t.Fatalf("error does not identify the ordinal: %v", err)
-	}
-	if strings.Contains(err.Error(), credentialMarker) {
-		t.Fatalf("error leaked credential material: %v", err)
-	}
-}
-
-func TestDesiredCloudInitSecretEmbedsLimitedManagementKubeconfig(t *testing.T) {
-	const testToken = "do-not-log-management-token"
-	testCA := []byte("test-management-ca")
-	kubeconfig, err := managementKubeconfig([]byte(testToken), testCA)
-	if err != nil {
-		t.Fatalf("managementKubeconfig: %v", err)
-	}
-	secret, err := desiredCloudInitSecret(fleetWith(nil), 0, kubeconfig)
-	if err != nil {
-		t.Fatalf("desiredCloudInitSecret: %v", err)
-	}
-
-	var cloud cloudConfig
-	if err := yaml.Unmarshal(secret.Data["userdata"], &cloud); err != nil {
-		t.Fatalf("parse cloud-config: %v", err)
-	}
-	var embedded string
-	for _, file := range cloud.WriteFiles {
-		if file.Path == dpuAgentKubeconfigPath {
-			embedded = file.Content
-		}
-	}
-	if embedded == "" {
-		t.Fatal("management kubeconfig is absent")
-	}
-	config, err := clientcmd.Load([]byte(embedded))
-	if err != nil {
-		t.Fatalf("parse embedded management kubeconfig: %v", err)
-	}
-	if len(config.Clusters) != 1 || len(config.AuthInfos) != 1 || len(config.Contexts) != 1 {
-		t.Fatal("management kubeconfig is not limited to one cluster, user, and context")
-	}
-	cluster := config.Clusters[managementConfigName]
-	if cluster == nil || cluster.Server != managementServiceURL ||
-		!bytes.Equal(cluster.CertificateAuthorityData, testCA) ||
-		cluster.InsecureSkipTLSVerify {
-		t.Fatal("management kubeconfig cluster is not pinned to the management Service and CA")
-	}
-	auth := config.AuthInfos[managementConfigName]
-	if auth == nil || auth.Token != testToken {
-		t.Fatal("management kubeconfig does not contain the expected bearer-token authentication")
-	}
-	if len(auth.ClientCertificateData) != 0 || len(auth.ClientKeyData) != 0 ||
-		auth.Username != "" || auth.Password != "" || auth.Exec != nil || auth.AuthProvider != nil {
-		t.Fatal("management kubeconfig contains authentication material other than its bearer token")
-	}
-	assertForbiddenCloudInitContent(t, string(secret.Data["userdata"]))
-}
-
-func TestForbiddenCloudInitContentRejectsForeignAndTenantKubeconfigs(t *testing.T) {
-	const testToken = "do-not-log-tenant-token"
-	makeUserdata := func(t *testing.T, mutate func(*cloudConfig)) string {
-		t.Helper()
-		kubeconfig, err := managementKubeconfig([]byte(testToken), []byte("test-ca"))
-		if err != nil {
-			t.Fatalf("managementKubeconfig: %v", err)
-		}
-		secret, err := desiredCloudInitSecret(fleetWith(nil), 0, kubeconfig)
-		if err != nil {
-			t.Fatalf("desiredCloudInitSecret: %v", err)
-		}
-		var cloud cloudConfig
-		if err := yaml.Unmarshal(secret.Data["userdata"], &cloud); err != nil {
-			t.Fatalf("parse cloud-config: %v", err)
-		}
-		mutate(&cloud)
-		data, err := yaml.Marshal(cloud)
-		if err != nil {
-			t.Fatalf("encode cloud-config: %v", err)
-		}
-		return "#cloud-config\n" + string(data)
-	}
-
-	fileAt := func(t *testing.T, cloud *cloudConfig, path string) *cloudWriteFile {
-		t.Helper()
-		for i := range cloud.WriteFiles {
-			if cloud.WriteFiles[i].Path == path {
-				return &cloud.WriteFiles[i]
+var _ = Describe("Cloud-init Secret", func() {
+	Describe("desiredCloudInitSecret", func() {
+		It("renders the identity, dpuagent configuration and management kubeconfig for an enabled guest", func() {
+			fleet := &scalev1alpha1.SimFleet{
+				ObjectMeta: metav1.ObjectMeta{Name: "scale-3000", Namespace: "fleet-ns", UID: "uid"},
+				Spec: scalev1alpha1.SimFleetSpec{
+					Replicas:          3000,
+					DevicesPerDPUNode: 10,
+					Bootstrap: &scalev1alpha1.BootstrapSpec{
+						DPUClusterRef: scalev1alpha1.DPUClusterReference{Name: "tenant1", Namespace: "dpf-ns"},
+					},
+				},
 			}
-		}
-		t.Fatalf("cloud-config writes no %s", path)
-		return nil
-	}
+			const ordinal = 12
+			kubeconfig, err := managementKubeconfig(
+				[]byte("test-management-token"),
+				[]byte("test-management-ca"),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			secret, err := desiredCloudInitSecret(fleet, ordinal, kubeconfig)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(secret.Type).To(Equal(corev1.SecretTypeOpaque))
+			Expect(secretDataKeys(secret.Data)).To(Equal([]string{"userdata"}))
+			ud := string(secret.Data["userdata"])
+			assertForbiddenCloudInitContent(ud)
+			assertCloudConfigTopLevelKeys(ud)
 
-	tests := []struct {
-		name    string
-		mutate  func(*testing.T, *cloudConfig)
-		wantErr string
-	}{
-		{
-			name:   "unmodified round trip",
-			mutate: func(*testing.T, *cloudConfig) {},
-		},
-		{
-			name: "foreign management server",
-			mutate: func(t *testing.T, cloud *cloudConfig) {
-				management := fileAt(t, cloud, dpuAgentKubeconfigPath)
-				config, err := clientcmd.Load([]byte(management.Content))
-				if err != nil {
-					t.Fatalf("parse management kubeconfig: %v", err)
+			var cfg cloudConfig
+			Expect(yaml.Unmarshal([]byte(ud), &cfg)).To(Succeed(), "parse userdata:\n%s", ud)
+			Expect(cfg.Hostname).To(Equal("scale-3000-dpu-000012"))
+			assertCloudInitDebugUser(cfg)
+			Expect(cfg.WriteFiles).To(HaveLen(3))
+			identity := cfg.WriteFiles[0]
+			Expect(identity.Path).To(Equal(dpuIdentityPath))
+			Expect(identity.Permissions).To(Equal("0600"))
+			// Every line is derived from the fleet and the ordinal. Nothing here can
+			// come from a DPU object, because none exists when this Secret is written.
+			wantIdentity := strings.Join([]string{
+				"DPU_NAME=scale-3000-host-0001-scale-3000-device-000012",
+				"DPU_NAMESPACE=fleet-ns",
+				"DPU_NODE_NAME=scale-3000-host-0001",
+				"DPU_DEVICE_NAME=scale-3000-device-000012",
+				"DPU_CLUSTER_NAME=tenant1",
+				"DPU_CLUSTER_NAMESPACE=dpf-ns",
+			}, "\n") + "\n"
+			Expect(identity.Content).To(Equal(wantIdentity))
+			conf := cfg.WriteFiles[1]
+			Expect(conf.Path).To(Equal(dpuAgentConfPath))
+			Expect(conf.Permissions).To(Equal("0600"))
+			wantConf, err := renderMockDPUAgentConfig(fleet, utils.SerialNumber(fleet.Name, ordinal))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(conf.Content).To(Equal(wantConf))
+			management := cfg.WriteFiles[2]
+			Expect(management.Path).To(Equal(dpuAgentKubeconfigPath))
+			Expect(management.Permissions).To(Equal("0600"))
+			Expect(management.Content).To(Equal(string(kubeconfig)))
+			// Both units are baked into the image and enabled there; an enabled
+			// guest must neither run commands nor name a unit it does not own.
+			Expect(cfg.Runcmd).To(BeEmpty())
+			for _, unit := range []string{waitKubeletJoinUnit, mockDPUAgentUnit} {
+				Expect(ud).NotTo(ContainSubstring(unit), "enabled cloud-init userdata mentions %q", unit)
+			}
+			Expect(secret.Labels).To(HaveKeyWithValue(labelOrdinal, "000012"))
+			Expect(secret.Labels).To(HaveKeyWithValue(labelFleetUID, "uid"))
+			Expect(len(secret.Data["userdata"])).To(BeNumerically("<", maxCloudInitUserdataBytes))
+		})
+
+		It("rejects a missing SimFleet or an empty management kubeconfig", func() {
+			_, err := cloudInitUserdata(nil, 0, []byte("kubeconfig"))
+			Expect(err).To(HaveOccurred(), "cloudInitUserdata accepted a nil SimFleet")
+			for _, kubeconfig := range [][]byte{nil, {}} {
+				secret, err := desiredCloudInitSecret(fleetWith(nil), 3, kubeconfig)
+				Expect(err).To(HaveOccurred(), "desiredCloudInitSecret accepted an empty management kubeconfig %#v", kubeconfig)
+				Expect(secret).To(BeNil(), "desiredCloudInitSecret accepted an empty management kubeconfig %#v", kubeconfig)
+				Expect(err.Error()).To(And(ContainSubstring("ordinal 3"), ContainSubstring("empty")),
+					"error does not name the empty kubeconfig and ordinal")
+			}
+		})
+
+		It("omits agent dependencies and persistently masks both units when the agent is disabled", func() {
+			disabled := false
+			fleet := fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled})
+			fleet.UID = "fleet-uid"
+			secret, err := desiredCloudInitSecret(fleet, 0, nil)
+			Expect(err).NotTo(HaveOccurred())
+			userdata := string(secret.Data["userdata"])
+			assertForbiddenCloudInitContent(userdata)
+			assertCloudConfigTopLevelKeys(userdata)
+
+			var cfg cloudConfig
+			Expect(yaml.Unmarshal([]byte(userdata), &cfg)).To(Succeed(), "parse userdata:\n%s", userdata)
+			Expect(cfg.WriteFiles).To(HaveLen(1))
+			Expect(cfg.WriteFiles[0].Path).To(Equal(dpuIdentityPath))
+			// Without a credential the join helper would fail on a loop, so both
+			// baked units must be masked, and persistently so (see cloudInitUserdata).
+			for _, unit := range []string{mockDPUAgentUnit, waitKubeletJoinUnit} {
+				Expect(cfg.Runcmd).To(ContainElement("systemctl mask --now "+unit),
+					"disabled runcmd does not persistently mask %s", unit)
+			}
+			Expect(cfg.Runcmd).NotTo(ContainElement(And(ContainSubstring("systemctl mask"), ContainSubstring("--runtime"))),
+				"runcmd masks a unit only for this boot")
+			assertCloudInitDebugUser(cfg)
+		})
+
+		It("rejects oversized userdata without leaking credentials", func() {
+			const credentialMarker = "do-not-leak-management-credential"
+			kubeconfig := []byte(strings.Repeat(credentialMarker, maxCloudInitUserdataBytes))
+			secret, err := desiredCloudInitSecret(fleetWith(nil), 7, kubeconfig)
+			Expect(err).To(HaveOccurred())
+			Expect(secret).To(BeNil(), "desiredCloudInitSecret returned a Secret for oversized userdata")
+			Expect(err.Error()).To(ContainSubstring("ordinal 7"), "error does not identify the ordinal")
+			Expect(strings.Contains(err.Error(), credentialMarker)).To(BeFalse(), "error leaked credential material")
+		})
+
+		It("embeds a management kubeconfig limited to the pinned Service, CA and bearer token", func() {
+			const testToken = "do-not-log-management-token"
+			testCA := []byte("test-management-ca")
+			kubeconfig, err := managementKubeconfig([]byte(testToken), testCA)
+			Expect(err).NotTo(HaveOccurred())
+			secret, err := desiredCloudInitSecret(fleetWith(nil), 0, kubeconfig)
+			Expect(err).NotTo(HaveOccurred())
+
+			var cloud cloudConfig
+			Expect(yaml.Unmarshal(secret.Data["userdata"], &cloud)).To(Succeed())
+			var embedded string
+			for _, file := range cloud.WriteFiles {
+				if file.Path == dpuAgentKubeconfigPath {
+					embedded = file.Content
 				}
+			}
+			Expect(embedded).NotTo(BeEmpty(), "management kubeconfig is absent")
+			config, err := clientcmd.Load([]byte(embedded))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Clusters).To(HaveLen(1))
+			Expect(config.AuthInfos).To(HaveLen(1))
+			Expect(config.Contexts).To(HaveLen(1))
+			cluster := config.Clusters[managementConfigName]
+			Expect(cluster).NotTo(BeNil())
+			Expect(cluster.Server).To(Equal(managementServiceURL))
+			Expect(cluster.CertificateAuthorityData).To(Equal(testCA))
+			Expect(cluster.InsecureSkipTLSVerify).To(BeFalse())
+			auth := config.AuthInfos[managementConfigName]
+			Expect(auth).NotTo(BeNil())
+			Expect(auth.Token == testToken).To(BeTrue(),
+				"management kubeconfig does not contain the expected bearer-token authentication")
+			Expect(auth.ClientCertificateData).To(BeEmpty())
+			Expect(auth.ClientKeyData).To(BeEmpty())
+			Expect(auth.Username).To(BeEmpty())
+			Expect(auth.Password).To(BeEmpty())
+			Expect(auth.Exec).To(BeNil())
+			Expect(auth.AuthProvider).To(BeNil())
+			assertForbiddenCloudInitContent(string(secret.Data["userdata"]))
+		})
+
+		// The largest spec.dpuAgent.bmc the CRD admits must still fit a cloud-init
+		// Secret next to a realistically sized management credential. The renderer
+		// does not validate overrides, so the longest operation name repeats 32 times with four
+		// methods here even though admission would refuse that list; only the bytes
+		// matter.
+		It("fits the largest admitted BMC settings into cloud-init", func() {
+			longest := strings.Repeat("x", 64)
+			overrides := make([]scalev1alpha1.DPUAgentResponseDelayOverride, 32)
+			for i := range overrides {
+				overrides[i] = scalev1alpha1.DPUAgentResponseDelayOverride{
+					Name:       "CertificateService.ReplaceCertificate",
+					Methods:    []string{"DELETE", "GET", "PATCH", "POST"},
+					MinSeconds: 600,
+					MaxSeconds: 600,
+				}
+			}
+			fleet := &scalev1alpha1.SimFleet{
+				ObjectMeta: metav1.ObjectMeta{Name: "scale-3000", Namespace: "fleet-ns", UID: "uid"},
+				Spec: scalev1alpha1.SimFleetSpec{
+					Replicas:          3000,
+					DevicesPerDPUNode: 10,
+					Bootstrap: &scalev1alpha1.BootstrapSpec{
+						DPUClusterRef: scalev1alpha1.DPUClusterReference{Name: "tenant1", Namespace: "dpf-ns"},
+					},
+					DPUAgent: &scalev1alpha1.DPUAgentSpec{
+						DPUType:      ptr.To("bf4"),
+						RebootMethod: ptr.To("SLR,PowerCycle,NoAction"),
+						BMC: &scalev1alpha1.DPUAgentBMCSpec{
+							PSID: ptr.To(strings.Repeat("M", 32)),
+							Firmware: &scalev1alpha1.DPUAgentFirmware{
+								BMC: &longest, ERoT: &longest, UEFI: &longest, NIC: &longest,
+							},
+							ResponseDelay:          &scalev1alpha1.DPUAgentResponseDelay{MinSeconds: 600, MaxSeconds: 600},
+							ResponseDelayOverrides: overrides,
+						},
+					},
+				},
+			}
+			kubeconfig, err := managementKubeconfig(
+				[]byte(strings.Repeat("t", 1400)),
+				[]byte(strings.Repeat("c", 1900)),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			secret, err := desiredCloudInitSecret(fleet, 2999, kubeconfig)
+			Expect(err).NotTo(HaveOccurred())
+			userdata := string(secret.Data["userdata"])
+			Expect(strings.Count(userdata, "name: CertificateService.ReplaceCertificate")).To(Equal(len(overrides)),
+				"rendered overrides")
+			Expect(len(userdata)).To(BeNumerically("<", maxCloudInitUserdataBytes), "userdata size")
+		})
+	})
+
+	Describe("dpuIdentityContent", func() {
+		It("leaves the cluster lines empty without a bootstrap spec", func() {
+			lines := strings.Split(dpuIdentityContent(fleetWith(nil), 0), "\n")
+			Expect(lines[len(lines)-1]).To(BeEmpty(), "identity content does not end with a newline: %q", lines)
+			lines = lines[:len(lines)-1]
+			Expect(lines).To(HaveLen(6))
+			Expect(lines[4:]).To(Equal([]string{"DPU_CLUSTER_NAME=", "DPU_CLUSTER_NAMESPACE="}))
+		})
+	})
+
+	Describe("validateForbiddenCloudInitContent", func() {
+		const testToken = "do-not-log-tenant-token"
+
+		makeUserdata := func(mutate func(*cloudConfig)) string {
+			GinkgoHelper()
+			kubeconfig, err := managementKubeconfig([]byte(testToken), []byte("test-ca"))
+			Expect(err).NotTo(HaveOccurred())
+			secret, err := desiredCloudInitSecret(fleetWith(nil), 0, kubeconfig)
+			Expect(err).NotTo(HaveOccurred())
+			var cloud cloudConfig
+			Expect(yaml.Unmarshal(secret.Data["userdata"], &cloud)).To(Succeed())
+			mutate(&cloud)
+			data, err := yaml.Marshal(cloud)
+			Expect(err).NotTo(HaveOccurred())
+			return "#cloud-config\n" + string(data)
+		}
+
+		fileAt := func(cloud *cloudConfig, path string) *cloudWriteFile {
+			GinkgoHelper()
+			for i := range cloud.WriteFiles {
+				if cloud.WriteFiles[i].Path == path {
+					return &cloud.WriteFiles[i]
+				}
+			}
+			Fail("cloud-config writes no " + path)
+			return nil
+		}
+
+		DescribeTable("rejects foreign and tenant kubeconfigs",
+			func(mutate func(*cloudConfig), wantErr string) {
+				err := validateForbiddenCloudInitContent(makeUserdata(mutate))
+				if wantErr == "" {
+					Expect(err).NotTo(HaveOccurred())
+					return
+				}
+				Expect(err).To(MatchError(ContainSubstring(wantErr)))
+				Expect(strings.Contains(err.Error(), testToken)).To(BeFalse(), "validation error leaked kubeconfig token")
+			},
+			Entry("unmodified round trip", func(*cloudConfig) {}, ""),
+			Entry("foreign management server", func(cloud *cloudConfig) {
+				management := fileAt(cloud, dpuAgentKubeconfigPath)
+				config, err := clientcmd.Load([]byte(management.Content))
+				Expect(err).NotTo(HaveOccurred())
 				config.Clusters[managementConfigName].Server = "https://tenant.example.test:6443"
 				data, err := clientcmd.Write(*config)
-				if err != nil {
-					t.Fatalf("encode foreign kubeconfig: %v", err)
-				}
+				Expect(err).NotTo(HaveOccurred())
 				management.Content = string(data)
-			},
-			wantErr: "does not use the pinned management Service and CA",
-		},
-		{
-			name: "token kubeconfig outside management path",
-			mutate: func(t *testing.T, cloud *cloudConfig) {
-				copied := *fileAt(t, cloud, dpuAgentKubeconfigPath)
+			}, "does not use the pinned management Service and CA"),
+			Entry("token kubeconfig outside management path", func(cloud *cloudConfig) {
+				copied := *fileAt(cloud, dpuAgentKubeconfigPath)
 				copied.Path = "/etc/dpf-sim/tenant.kubeconfig"
 				cloud.WriteFiles = append(cloud.WriteFiles, copied)
-			},
-			wantErr: "contains an unapproved kubeconfig",
-		},
-		{
-			name: "kubeconfig inside the dpuagent configuration",
-			mutate: func(t *testing.T, cloud *cloudConfig) {
-				management := fileAt(t, cloud, dpuAgentKubeconfigPath)
-				conf := fileAt(t, cloud, dpuAgentConfPath)
+			}, "contains an unapproved kubeconfig"),
+			Entry("kubeconfig inside the dpuagent configuration", func(cloud *cloudConfig) {
+				management := fileAt(cloud, dpuAgentKubeconfigPath)
+				conf := fileAt(cloud, dpuAgentConfPath)
 				conf.Content += management.Content
-			},
-			wantErr: "contains an unapproved kubeconfig",
-		},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			userdata := makeUserdata(t, func(cloud *cloudConfig) { testCase.mutate(t, cloud) })
-			err := validateForbiddenCloudInitContent(userdata)
-			if testCase.wantErr == "" {
-				if err != nil {
-					t.Fatalf("validateForbiddenCloudInitContent: %v", err)
+			}, "contains an unapproved kubeconfig"),
+		)
+	})
+
+	Describe("yamlLiteral", func() {
+		DescribeTable("round-trips adversarial content",
+			func(content string) {
+				indicator, block := yamlLiteral(content, "  ")
+				document := "content: " + indicator + "\n" + block
+				var decoded struct {
+					Content string `json:"content"`
 				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
-				t.Fatalf("validateForbiddenCloudInitContent error %v, want %q", err, testCase.wantErr)
-			}
-			if strings.Contains(err.Error(), testToken) {
-				t.Fatal("validation error leaked kubeconfig token")
-			}
-		})
-	}
-}
-
-func TestYAMLLiteralRoundTripAdversarialContent(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{name: "first line begins with spaces", content: "    indented first\nsecond"},
-		{name: "YAML punctuation", content: "|:#[]{} &anchor *alias !tag\n---\n..."},
-		{name: "no trailing newline", content: "first\nsecond"},
-		{name: "one trailing newline", content: "first\nsecond\n"},
-		{name: "multiple trailing newlines", content: "first\nsecond\n\n\n"},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			indicator, block := yamlLiteral(testCase.content, "  ")
-			document := "content: " + indicator + "\n" + block
-			var decoded struct {
-				Content string `json:"content"`
-			}
-			if err := yaml.Unmarshal([]byte(document), &decoded); err != nil {
-				t.Fatalf("parse literal block: %v", err)
-			}
-			if decoded.Content != testCase.content {
-				t.Fatalf("literal content changed: got %q, want %q", decoded.Content, testCase.content)
-			}
-		})
-	}
-}
-
-func TestNewCloudInitSecretEnforcesSizeLimit(t *testing.T) {
-	secret, err := newCloudInitSecret(
-		fleetWith(nil),
-		0,
-		strings.Repeat("x", maxCloudInitUserdataBytes),
-	)
-	if err == nil || secret != nil {
-		t.Fatal("newCloudInitSecret accepted oversized userdata")
-	}
-
-	secret, err = newCloudInitSecret(
-		fleetWith(nil),
-		0,
-		strings.Repeat("x", maxCloudInitUserdataBytes-1),
-	)
-	if err != nil || secret == nil {
-		t.Fatalf("newCloudInitSecret rejected userdata under the limit: %v", err)
-	}
-}
-
-// The largest spec.dpuAgent.bmc the CRD admits must still fit a cloud-init
-// Secret next to a realistically sized management credential. The renderer
-// does not validate overrides, so the longest operation name repeats 32 times with four
-// methods here even though admission would refuse that list; only the bytes
-// matter.
-func TestLargestAdmittedBMCSettingsFitCloudInit(t *testing.T) {
-	longest := strings.Repeat("x", 64)
-	overrides := make([]scalev1alpha1.DPUAgentResponseDelayOverride, 32)
-	for i := range overrides {
-		overrides[i] = scalev1alpha1.DPUAgentResponseDelayOverride{
-			Name:       "CertificateService.ReplaceCertificate",
-			Methods:    []string{"DELETE", "GET", "PATCH", "POST"},
-			MinSeconds: 600,
-			MaxSeconds: 600,
-		}
-	}
-	fleet := &scalev1alpha1.SimFleet{
-		ObjectMeta: metav1.ObjectMeta{Name: "scale-3000", Namespace: "fleet-ns", UID: "uid"},
-		Spec: scalev1alpha1.SimFleetSpec{
-			Replicas:          3000,
-			DevicesPerDPUNode: 10,
-			Bootstrap: &scalev1alpha1.BootstrapSpec{
-				DPUClusterRef: scalev1alpha1.DPUClusterReference{Name: "tenant1", Namespace: "dpf-ns"},
+				Expect(yaml.Unmarshal([]byte(document), &decoded)).To(Succeed())
+				Expect(decoded.Content).To(Equal(content), "literal content changed")
 			},
-			DPUAgent: &scalev1alpha1.DPUAgentSpec{
-				DPUType:      ptr.To("bf4"),
-				RebootMethod: ptr.To("SLR,PowerCycle,NoAction"),
-				BMC: &scalev1alpha1.DPUAgentBMCSpec{
-					PSID: ptr.To(strings.Repeat("M", 32)),
-					Firmware: &scalev1alpha1.DPUAgentFirmware{
-						BMC: &longest, ERoT: &longest, UEFI: &longest, NIC: &longest,
-					},
-					ResponseDelay:          &scalev1alpha1.DPUAgentResponseDelay{MinSeconds: 600, MaxSeconds: 600},
-					ResponseDelayOverrides: overrides,
-				},
-			},
-		},
-	}
-	kubeconfig, err := managementKubeconfig(
-		[]byte(strings.Repeat("t", 1400)),
-		[]byte(strings.Repeat("c", 1900)),
-	)
-	if err != nil {
-		t.Fatalf("managementKubeconfig: %v", err)
-	}
-	secret, err := desiredCloudInitSecret(fleet, 2999, kubeconfig)
-	if err != nil {
-		t.Fatalf("desiredCloudInitSecret: %v", err)
-	}
-	userdata := string(secret.Data["userdata"])
-	if got := strings.Count(userdata, "name: CertificateService.ReplaceCertificate"); got != len(overrides) {
-		t.Fatalf("userdata renders %d overrides, want %d", got, len(overrides))
-	}
-	if size := len(userdata); size >= maxCloudInitUserdataBytes {
-		t.Fatalf("userdata size = %d, want less than %d", size, maxCloudInitUserdataBytes)
-	}
-}
+			Entry("first line begins with spaces", "    indented first\nsecond"),
+			Entry("YAML punctuation", "|:#[]{} &anchor *alias !tag\n---\n..."),
+			Entry("no trailing newline", "first\nsecond"),
+			Entry("one trailing newline", "first\nsecond\n"),
+			Entry("multiple trailing newlines", "first\nsecond\n\n\n"),
+		)
+	})
+
+	Describe("newCloudInitSecret", func() {
+		It("enforces the userdata size limit", func() {
+			secret, err := newCloudInitSecret(
+				fleetWith(nil),
+				0,
+				strings.Repeat("x", maxCloudInitUserdataBytes),
+			)
+			Expect(err).To(HaveOccurred(), "newCloudInitSecret accepted oversized userdata")
+			Expect(secret).To(BeNil(), "newCloudInitSecret accepted oversized userdata")
+
+			secret, err = newCloudInitSecret(
+				fleetWith(nil),
+				0,
+				strings.Repeat("x", maxCloudInitUserdataBytes-1),
+			)
+			Expect(err).NotTo(HaveOccurred(), "newCloudInitSecret rejected userdata under the limit")
+			Expect(secret).NotTo(BeNil(), "newCloudInitSecret rejected userdata under the limit")
+		})
+	})
+})

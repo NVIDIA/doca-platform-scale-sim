@@ -20,88 +20,68 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
-func loadSimInstanceCRD(t *testing.T) *apiextensionsv1.CustomResourceDefinition {
-	t.Helper()
+func loadSimInstanceCRD() *apiextensionsv1.CustomResourceDefinition {
+	GinkgoHelper()
 	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
+	Expect(ok).To(BeTrue(), "runtime.Caller failed")
 	path := filepath.Join(filepath.Dir(file), "..", "..", "config", "crd", "bases", "scale.dpu.nvidia.com_siminstances.yaml")
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read SimInstance CRD: %v", err)
-	}
+	Expect(err).NotTo(HaveOccurred(), "read SimInstance CRD")
 	var crd apiextensionsv1.CustomResourceDefinition
-	if err := yaml.Unmarshal(data, &crd); err != nil {
-		t.Fatalf("unmarshal SimInstance CRD: %v", err)
-	}
-	if len(crd.Spec.Versions) == 0 {
-		t.Fatal("SimInstance CRD has no versions")
-	}
-	if crd.Spec.Versions[0].Schema == nil || crd.Spec.Versions[0].Schema.OpenAPIV3Schema == nil {
-		t.Fatal("SimInstance CRD has no schema")
-	}
+	Expect(yaml.Unmarshal(data, &crd)).To(Succeed(), "unmarshal SimInstance CRD")
+	Expect(crd.Spec.Versions).NotTo(BeEmpty(), "SimInstance CRD has no versions")
+	Expect(crd.Spec.Versions[0].Schema).NotTo(BeNil(), "SimInstance CRD has no schema")
+	Expect(crd.Spec.Versions[0].Schema.OpenAPIV3Schema).NotTo(BeNil(), "SimInstance CRD has no schema")
 	return &crd
 }
 
-func TestSimInstanceShortName(t *testing.T) {
-	crd := loadSimInstanceCRD(t)
-	if !slices.Contains(crd.Spec.Names.ShortNames, "smi") {
-		t.Fatalf("shortNames = %v, want smi", crd.Spec.Names.ShortNames)
-	}
-}
+var _ = Describe("SimInstance CRD", func() {
+	It("registers the smi short name", func() {
+		crd := loadSimInstanceCRD()
+		Expect(crd.Spec.Names.ShortNames).To(ContainElement("smi"))
+	})
 
-// The ordinal and host index are the instance's identity: the name, the
-// children, and the DPUNode grouping all derive from them, so a changed value
-// would silently point the instance at someone else's inventory.
-func TestSimInstanceSpecIdentityIsRequiredAndImmutable(t *testing.T) {
-	crd := loadSimInstanceCRD(t)
-	spec, ok := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
-	if !ok {
-		t.Fatal("SimInstance CRD schema is missing spec")
-	}
-	for _, field := range []string{"ordinal", "hostIndex"} {
-		t.Run(field, func(t *testing.T) {
-			if !slices.Contains(spec.Required, field) {
-				t.Fatalf("spec.required = %v, want %s", spec.Required, field)
-			}
-			prop, ok := spec.Properties[field]
-			if !ok {
-				t.Fatalf("spec schema is missing %s", field)
-			}
-			if prop.Minimum == nil || *prop.Minimum != 0 {
-				t.Fatalf("%s minimum = %v, want 0", field, prop.Minimum)
-			}
-			if !hasValidationRule(prop.XValidations, "self == oldSelf", field+" is immutable") {
-				t.Fatalf("%s is missing the immutability rule: %v", field, prop.XValidations)
-			}
-		})
-	}
-}
+	// The ordinal and host index are the instance's identity: the name, the
+	// children, and the DPUNode grouping all derive from them, so a changed value
+	// would silently point the instance at someone else's inventory.
+	DescribeTable("requires spec identity fields and makes them immutable",
+		func(field string) {
+			crd := loadSimInstanceCRD()
+			Expect(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties).To(HaveKey("spec"),
+				"SimInstance CRD schema is missing spec")
+			spec := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
+			Expect(spec.Required).To(ContainElement(field))
+			Expect(spec.Properties).To(HaveKey(field), "spec schema is missing %s", field)
+			prop := spec.Properties[field]
+			Expect(prop.Minimum).NotTo(BeNil(), "%s minimum", field)
+			Expect(*prop.Minimum).To(BeZero(), "%s minimum", field)
+			Expect(hasValidationRule(prop.XValidations, "self == oldSelf", field+" is immutable")).To(BeTrue(),
+				"%s is missing the immutability rule: %v", field, prop.XValidations)
+		},
+		Entry("ordinal", "ordinal"),
+		Entry("hostIndex", "hostIndex"),
+	)
 
-func TestSimInstanceStatusSubresourceEnabled(t *testing.T) {
-	crd := loadSimInstanceCRD(t)
-	sub := crd.Spec.Versions[0].Subresources
-	if sub == nil || sub.Status == nil {
-		t.Fatal("SimInstance CRD does not enable the status subresource")
-	}
-}
+	It("enables the status subresource", func() {
+		crd := loadSimInstanceCRD()
+		sub := crd.Spec.Versions[0].Subresources
+		Expect(sub).NotTo(BeNil(), "SimInstance CRD does not enable the status subresource")
+		Expect(sub.Status).NotTo(BeNil(), "SimInstance CRD does not enable the status subresource")
+	})
 
-func TestSimInstancePrintColumns(t *testing.T) {
-	crd := loadSimInstanceCRD(t)
-	var got []string
-	for _, c := range crd.Spec.Versions[0].AdditionalPrinterColumns {
-		got = append(got, c.Name)
-	}
-	want := []string{"Ordinal", "Host", "Phase", "Ready", "Age"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("print columns = %v, want %v", got, want)
-	}
-}
+	It("prints the ordinal, host, phase, ready and age columns", func() {
+		crd := loadSimInstanceCRD()
+		var got []string
+		for _, c := range crd.Spec.Versions[0].AdditionalPrinterColumns {
+			got = append(got, c.Name)
+		}
+		Expect(got).To(Equal([]string{"Ordinal", "Host", "Phase", "Ready", "Age"}))
+	})
+})
