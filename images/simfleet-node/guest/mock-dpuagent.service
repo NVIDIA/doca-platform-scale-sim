@@ -1,0 +1,17 @@
+[Unit]
+Description=DPF mock DPU (Redfish BMC + fake dpu-agent)
+After=network-online.target cloud-final.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStartPre=/usr/bin/test -s /etc/mock-dpuagent/config.yaml
+ExecStart=/opt/dpf/mock-dpuagent --config=/etc/mock-dpuagent/config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=cloud-init.target

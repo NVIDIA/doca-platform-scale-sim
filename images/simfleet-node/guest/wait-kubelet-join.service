@@ -1,0 +1,24 @@
+[Unit]
+Description=Configure kubelet from the DPF join Secret
+After=network-online.target cloud-final.service containerd.service
+Wants=network-online.target
+# Deliberately not ordered against mock-dpuagent.service. DPF only publishes
+# the join Secret after it has driven this guest's Redfish BMC, so delaying
+# the mock on this unit would deadlock provisioning. Both steps are
+# idempotent and the mock retries its own kubelet start.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+# The Secret can take many minutes to appear; the helper bounds its own wait
+# and exits non-zero so systemd owns the retry.
+TimeoutStartSec=0
+ExecStart=/opt/dpf/wait-kubelet-join.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=cloud-init.target
