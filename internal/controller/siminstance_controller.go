@@ -42,10 +42,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpf"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/ownership"
 )
-
-const simInstanceTeardownFinalizer = "scale.dpu.nvidia.com/siminstance-teardown"
 
 // SimInstanceReconciler converges the children of one SimFleet ordinal.
 type SimInstanceReconciler struct {
@@ -58,7 +59,7 @@ type SimInstanceReconciler struct {
 	APIReader client.Reader
 
 	// ServiceAccountTokenIssuer mints per-DPU management API credentials.
-	ServiceAccountTokenIssuer ServiceAccountTokenIssuer
+	ServiceAccountTokenIssuer dpuagent.ServiceAccountTokenIssuer
 	// ManagementCA authenticates the management API from simulated DPUs.
 	ManagementCA []byte
 
@@ -95,23 +96,18 @@ func (r *SimInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	log := logf.FromContext(ctx).WithValues("simInstance", req.NamespacedName, "ordinal", instance.Spec.Ordinal)
 	ctx = logf.IntoContext(ctx, log)
 
-	if !instance.DeletionTimestamp.IsZero() {
-		fleet, err := r.owningFleet(ctx, instance)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		return r.reconcileDelete(ctx, fleet, instance)
-	}
-	if instance.Status.Phase == scalev1alpha1.SimInstanceFailed {
-		return ctrl.Result{}, nil
-	}
 	fleet, err := r.owningFleet(ctx, instance)
-	if err != nil || fleet == nil {
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !fleet.DeletionTimestamp.IsZero() {
-		// The fleet's finalizer deletes this instance next; anything
-		// converged now would only be torn down again.
+	if !instance.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, fleet, instance)
+	}
+	// A Failed instance waits for the fleet to replace it, and a deleting
+	// fleet's finalizer deletes this instance next; anything converged now
+	// would only be torn down again.
+	if instance.Status.Phase == scalev1alpha1.SimInstanceFailed ||
+		fleet == nil || !fleet.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
 	if err := r.ensureInstanceFinalizer(ctx, instance); err != nil {
@@ -124,7 +120,7 @@ func (r *SimInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	base := instance.DeepCopy()
 	children, convergeErr := r.converge(ctx, fleet, instance)
 	setInstancePhase(fleet, instance, children)
-	if errors.Is(convergeErr, errOwnershipConflict) {
+	if errors.Is(convergeErr, ownership.ErrConflict) {
 		// The child is someone else's. It is never modified; the SimFleet
 		// reconciler replaces this instance instead.
 		instance.Status.Phase = scalev1alpha1.SimInstanceFailed
@@ -151,7 +147,7 @@ func (r *SimInstanceReconciler) owningFleet(
 	ctx context.Context,
 	instance *scalev1alpha1.SimInstance,
 ) (*scalev1alpha1.SimFleet, error) {
-	key, ok := controllerOwnerKey(instance, scalev1alpha1.GroupVersion.String(), "SimFleet")
+	key, ok := ownership.ControllerOwnerKey(instance, scalev1alpha1.GroupVersion.String(), "SimFleet")
 	if !ok {
 		return nil, nil
 	}
@@ -169,11 +165,11 @@ func (r *SimInstanceReconciler) owningFleet(
 }
 
 func (r *SimInstanceReconciler) ensureInstanceFinalizer(ctx context.Context, instance *scalev1alpha1.SimInstance) error {
-	if controllerutil.ContainsFinalizer(instance, simInstanceTeardownFinalizer) {
+	if controllerutil.ContainsFinalizer(instance, scalev1alpha1.SimInstanceFinalizer) {
 		return nil
 	}
 	base := instance.DeepCopy()
-	controllerutil.AddFinalizer(instance, simInstanceTeardownFinalizer)
+	controllerutil.AddFinalizer(instance, scalev1alpha1.SimInstanceFinalizer)
 	if err := r.Patch(ctx, instance, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("add SimInstance %q finalizer: %w", instance.Name, err)
 	}
@@ -190,7 +186,7 @@ func (r *SimInstanceReconciler) mapDPUToInstance(ctx context.Context, object cli
 	if err := r.Get(ctx, key, device); err != nil {
 		return nil
 	}
-	instanceKey, ok := controllerOwnerKey(device, scalev1alpha1.GroupVersion.String(), "SimInstance")
+	instanceKey, ok := ownership.ControllerOwnerKey(device, scalev1alpha1.GroupVersion.String(), "SimInstance")
 	if !ok {
 		return nil
 	}
@@ -207,7 +203,7 @@ func (r *SimInstanceReconciler) mapFleetToInstances(ctx context.Context, object 
 	list := &scalev1alpha1.SimInstanceList{}
 	if err := r.List(ctx, list,
 		client.InNamespace(fleet.Namespace),
-		client.MatchingLabels{labelFleetName: fleet.Name},
+		client.MatchingLabels{naming.LabelFleetName: fleet.Name},
 		client.UnsafeDisableDeepCopy,
 	); err != nil {
 		logf.FromContext(ctx).Error(err, "Could not list SimInstances of SimFleet", "simFleet", fleet.Name)
@@ -241,7 +237,7 @@ func (r *SimInstanceReconciler) mapVMIToInstance(ctx context.Context, object cli
 	if err := r.Get(ctx, client.ObjectKey{Name: vmName, Namespace: vmi.Namespace}, vm); err != nil {
 		return nil
 	}
-	instanceKey, ok := controllerOwnerKey(vm, scalev1alpha1.GroupVersion.String(), "SimInstance")
+	instanceKey, ok := ownership.ControllerOwnerKey(vm, scalev1alpha1.GroupVersion.String(), "SimInstance")
 	if !ok {
 		return nil
 	}
@@ -306,7 +302,7 @@ func instanceConditionTrue(instance *scalev1alpha1.SimInstance, conditionType st
 // it on.
 func failInstanceCondition(instance *scalev1alpha1.SimInstance, conditionType string, err error) error {
 	reason := conditionReason(err)
-	if errors.Is(err, errOwnershipConflict) {
+	if errors.Is(err, ownership.ErrConflict) {
 		reason = "OwnershipConflict"
 	}
 	setInstanceCondition(instance, conditionType, false, reason, err.Error())
@@ -414,7 +410,7 @@ func (r *SimInstanceReconciler) detectDrift(
 	recorded := instance.Status.ObservedUIDs
 	ordinal := instance.Spec.Ordinal
 	if recorded.DPU != "" {
-		found, err := r.deviceDPUExists(ctx, instance.Namespace, utils.DeviceName(fleet.Name, ordinal), recorded.DPU)
+		found, err := r.deviceDPUExists(ctx, instance.Namespace, naming.DeviceName(fleet.Name, ordinal), recorded.DPU)
 		if err != nil {
 			return "", err
 		}
@@ -422,12 +418,12 @@ func (r *SimInstanceReconciler) detectDrift(
 			return "DPUReplaced", nil
 		}
 	}
-	vmName := utils.VirtualMachineName(fleet.Name, ordinal)
+	vmName := naming.VirtualMachineName(fleet.Name, ordinal)
 	for _, child := range []struct {
 		uid, name, kind string
 		obj             client.Object
 	}{
-		{recorded.DPUDevice, utils.DeviceName(fleet.Name, ordinal), "DPUDevice", &provisioningv1.DPUDevice{}},
+		{recorded.DPUDevice, naming.DeviceName(fleet.Name, ordinal), "DPUDevice", &provisioningv1.DPUDevice{}},
 		{recorded.VirtualMachine, vmName, "VirtualMachine", &virtv1.VirtualMachine{}},
 		{recorded.VirtualMachineInstance, vmName, "VirtualMachineInstance", &virtv1.VirtualMachineInstance{}},
 	} {
@@ -481,28 +477,28 @@ func newTeardownTarget(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.Si
 		return teardownTarget{
 			fleet:          fleet,
 			namespace:      instance.Namespace,
-			deviceName:     utils.DeviceName(fleet.Name, ordinal),
-			dpuName:        utils.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal),
-			vmName:         utils.VirtualMachineName(fleet.Name, ordinal),
-			cloudInitName:  utils.CloudInitSecretName(fleet.Name, ordinal),
-			credentialName: dpuAgentCredentialName(fleet, ordinal),
+			deviceName:     naming.DeviceName(fleet.Name, ordinal),
+			dpuName:        naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal),
+			vmName:         naming.VirtualMachineName(fleet.Name, ordinal),
+			cloudInitName:  naming.CloudInitSecretName(fleet.Name, ordinal),
+			credentialName: dpuagent.CredentialName(fleet, ordinal),
 		}, true
 	}
-	name := instance.Labels[labelFleetName]
+	name := instance.Labels[naming.LabelFleetName]
 	if name == "" {
-		key, ok := controllerOwnerKey(instance, scalev1alpha1.GroupVersion.String(), "SimFleet")
+		key, ok := ownership.ControllerOwnerKey(instance, scalev1alpha1.GroupVersion.String(), "SimFleet")
 		if !ok {
 			return teardownTarget{}, false
 		}
 		name = key.Name
 	}
-	dpuName := utils.DPUNameForHost(name, instance.Spec.HostIndex, ordinal)
+	dpuName := naming.DPUNameForHost(name, instance.Spec.HostIndex, ordinal)
 	return teardownTarget{
 		namespace:      instance.Namespace,
-		deviceName:     utils.DeviceName(name, ordinal),
+		deviceName:     naming.DeviceName(name, ordinal),
 		dpuName:        dpuName,
-		vmName:         utils.VirtualMachineName(name, ordinal),
-		cloudInitName:  utils.CloudInitSecretName(name, ordinal),
+		vmName:         naming.VirtualMachineName(name, ordinal),
+		cloudInitName:  naming.CloudInitSecretName(name, ordinal),
 		credentialName: dpuName,
 	}, true
 }
@@ -551,7 +547,7 @@ func (r *SimInstanceReconciler) reconcileDelete(
 	fleet *scalev1alpha1.SimFleet,
 	instance *scalev1alpha1.SimInstance,
 ) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(instance, simInstanceTeardownFinalizer) {
+	if !controllerutil.ContainsFinalizer(instance, scalev1alpha1.SimInstanceFinalizer) {
 		return ctrl.Result{}, nil
 	}
 	target, ok := newTeardownTarget(fleet, instance)
@@ -609,7 +605,7 @@ func (r *SimInstanceReconciler) now() time.Time {
 
 func (r *SimInstanceReconciler) removeInstanceFinalizer(ctx context.Context, instance *scalev1alpha1.SimInstance) error {
 	base := instance.DeepCopy()
-	controllerutil.RemoveFinalizer(instance, simInstanceTeardownFinalizer)
+	controllerutil.RemoveFinalizer(instance, scalev1alpha1.SimInstanceFinalizer)
 	if err := r.Patch(ctx, instance, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -641,7 +637,7 @@ func (r *SimInstanceReconciler) quarantineInstanceDevice(
 		return true, nil
 	}
 	base := device.DeepCopy()
-	for key := range deviceSelectionLabels(target.fleet) {
+	for key := range dpf.DeviceSelectionLabels(target.fleet) {
 		delete(device.Labels, key)
 	}
 	if inventoryMetadataUnchanged(base, device) {
@@ -715,7 +711,7 @@ func (r *SimInstanceReconciler) ownsInstanceDPU(
 }
 
 func (r *SimInstanceReconciler) deleteInstanceJoinSecret(ctx context.Context, target teardownTarget) error {
-	name := utils.KubeadmJoinSecretName(target.dpuName)
+	name := naming.KubeadmJoinSecretName(target.dpuName)
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: target.namespace}}
 	if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete join Secret %q: %w", name, err)
@@ -834,7 +830,7 @@ func (r *SimInstanceReconciler) deleteControlledChild(
 }
 
 func ownsTeardownChild(ctx context.Context, instance *scalev1alpha1.SimInstance, obj client.Object, kind string) bool {
-	if err := validateControlledBy(obj, instance, "SimInstance", kind); err != nil {
+	if err := ownership.ValidateControlledBy(obj, instance, "SimInstance", kind); err != nil {
 		logf.FromContext(ctx).Info("Left a child this SimInstance does not own", "kind", kind, "name", obj.GetName(),
 			"reason", err.Error())
 		return false
@@ -864,4 +860,43 @@ func (r *SimInstanceReconciler) deleteTeardownObject(
 		return nil
 	}
 	return stripFinalizersAndForceDelete(ctx, r.Client, r.Recorder, instance, obj, kind, instance.Spec.Ordinal, elapsed)
+}
+
+// stripFinalizersAndForceDelete assumes the caller has already proved obj is
+// eventObject's and that the phase deadline has passed.
+func stripFinalizersAndForceDelete(
+	ctx context.Context,
+	c client.Client,
+	recorder events.EventRecorder,
+	eventObject client.Object,
+	obj client.Object,
+	kind string,
+	ordinal int,
+	elapsed time.Duration,
+) error {
+	base := obj.DeepCopyObject().(client.Object)
+	obj.SetFinalizers(nil)
+	if err := c.Patch(ctx, obj, client.MergeFrom(base)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("strip %s %q finalizers: %w", kind, obj.GetName(), err)
+	}
+	message := fmt.Sprintf(
+		"stripped finalizers from %s %s ordinal %d after %s",
+		kind, obj.GetName(), ordinal, lifecycleForceTimeout,
+	)
+	if recorder != nil {
+		recorder.Eventf(eventObject, nil, corev1.EventTypeWarning, "LifecycleForceDelete", "ForceDelete", "%s", message)
+	}
+	logf.FromContext(ctx).Error(nil, "Stripped finalizers from blocked lifecycle object",
+		"ordinal", ordinal,
+		"kind", kind,
+		"name", obj.GetName(),
+		"elapsed", elapsed,
+	)
+	if err := c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete %s %q after stripping finalizers: %w", kind, obj.GetName(), err)
+	}
+	return nil
 }

@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+// Package dpuagent renders the mock DPU agent configuration and the per-DPU
+// management credential the guest's join helper reads its join Secret with.
+package dpuagent
 
 import (
 	mockconfig "github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/config"
@@ -24,13 +26,21 @@ import (
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
 )
 
+// The units the guest image bakes in and enables. Cloud-init only ever masks
+// them; it never starts kubelet or runs a join command itself.
 const (
-	dpuAgentConfPath       = "/etc/mock-dpuagent/config.yaml"
-	dpuAgentKubeconfigPath = "/etc/dpf-sim/mgmt.kubeconfig"
-	// The units the guest image bakes in and enables. Cloud-init only ever
-	// masks them; it never starts kubelet or runs a join command itself.
-	mockDPUAgentUnit    = "mock-dpuagent.service"
-	waitKubeletJoinUnit = "wait-kubelet-join.service"
+	// MockDPUAgentUnit runs the mock DPU agent and its Redfish BMC.
+	MockDPUAgentUnit = "mock-dpuagent.service"
+	// WaitKubeletJoinUnit waits for the DPU's join Secret and joins the guest
+	// to the DPU cluster.
+	WaitKubeletJoinUnit = "wait-kubelet-join.service"
+)
+
+const (
+	// ConfPath is where the guest reads the mock DPU agent configuration.
+	ConfPath = "/etc/mock-dpuagent/config.yaml"
+	// KubeconfigPath is where the guest reads its management credential.
+	KubeconfigPath = "/etc/dpf-sim/mgmt.kubeconfig"
 )
 
 type mockDPUAgentConfig struct {
@@ -71,7 +81,7 @@ type mockDPUAgentAgent struct {
 	DPUClusterJoin string `json:"dpuClusterJoin"`
 }
 
-func resolvedDPUAgentSpec(fleet *scalev1alpha1.SimFleet) scalev1alpha1.DPUAgentSpec {
+func resolvedSpec(fleet *scalev1alpha1.SimFleet) scalev1alpha1.DPUAgentSpec {
 	spec := scalev1alpha1.DPUAgentSpec{}
 	if fleet.Spec.DPUAgent != nil {
 		spec = *fleet.Spec.DPUAgent.DeepCopy()
@@ -84,12 +94,16 @@ func resolvedDPUAgentSpec(fleet *scalev1alpha1.SimFleet) scalev1alpha1.DPUAgentS
 	return spec
 }
 
-func dpuAgentEnabled(fleet *scalev1alpha1.SimFleet) bool {
-	return *resolvedDPUAgentSpec(fleet).Enabled
+// Enabled reports whether the fleet's guests run the mock DPU agent. It
+// defaults to true.
+func Enabled(fleet *scalev1alpha1.SimFleet) bool {
+	return *resolvedSpec(fleet).Enabled
 }
 
-func renderMockDPUAgentConfig(fleet *scalev1alpha1.SimFleet, serial string) (string, error) {
-	spec := resolvedDPUAgentSpec(fleet)
+// RenderConfig renders the mock DPU agent configuration for the guest with
+// serial, or "" when the agent is disabled.
+func RenderConfig(fleet *scalev1alpha1.SimFleet, serial string) (string, error) {
+	spec := resolvedSpec(fleet)
 	if !*spec.Enabled {
 		return "", nil
 	}

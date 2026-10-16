@@ -34,7 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/ownership"
 )
 
 // newEnvtestInstance is ordinal 0 of fleet, controlled by it.
@@ -42,7 +43,7 @@ func newEnvtestInstance(fleet *scalev1alpha1.SimFleet) *scalev1alpha1.SimInstanc
 	GinkgoHelper()
 	instance := &scalev1alpha1.SimInstance{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.InstanceName(fleet.Name, 0),
+			Name:      naming.InstanceName(fleet.Name, 0),
 			Namespace: fleet.Namespace,
 		},
 		Spec: scalev1alpha1.SimInstanceSpec{Ordinal: 0, HostIndex: 0},
@@ -72,14 +73,14 @@ func provisionDPU(fleet *scalev1alpha1.SimFleet, ordinal int) *provisioningv1.DP
 	GinkgoHelper()
 	dpu := &provisioningv1.DPU{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal),
+			Name:      naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal),
 			Namespace: fleet.Namespace,
 		},
 		Spec: provisioningv1.DPUSpec{
-			DPUNodeName:   utils.NodeName(fleet.Name, utils.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode)),
-			DPUDeviceName: utils.DeviceName(fleet.Name, ordinal),
+			DPUNodeName:   naming.NodeName(fleet.Name, naming.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode)),
+			DPUDeviceName: naming.DeviceName(fleet.Name, ordinal),
 			BFB:           ptr.To("bfb"),
-			SerialNumber:  utils.SerialNumber(fleet.Name, ordinal),
+			SerialNumber:  naming.SerialNumber(fleet.Name, ordinal),
 			NodeEffect:    provisioningv1.NodeEffect{Action: provisioningv1.Action{NoEffect: ptr.To(true)}},
 			DPUFlavor:     "flavor",
 		},
@@ -109,7 +110,7 @@ var _ = Describe("SimInstance reconciler", func() {
 		Eventually(func(g Gomega) {
 			current := &scalev1alpha1.SimInstance{}
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), current)).To(Succeed())
-			g.Expect(current.Finalizers).To(ContainElement(simInstanceTeardownFinalizer))
+			g.Expect(current.Finalizers).To(ContainElement(scalev1alpha1.SimInstanceFinalizer))
 			g.Expect(instanceConditionTrue(current, scalev1alpha1.SimInstanceChildrenCreated)).To(BeTrue(),
 				"conditions = %+v", current.Status.Conditions)
 		}, 30*time.Second, 100*time.Millisecond).Should(Succeed())
@@ -119,7 +120,7 @@ var _ = Describe("SimInstance reconciler", func() {
 		for _, child := range ordinalChildren(fleet, 0) {
 			key := client.ObjectKey{Name: child.name, Namespace: fleet.Namespace}
 			Expect(k8sClient.Get(ctx, key, child.obj)).To(Succeed(), "get %T %s", child.obj, child.name)
-			Expect(controlledBy(child.obj, scalev1alpha1.GroupVersion.String(), "SimInstance", current.Name, current.UID)).
+			Expect(ownership.ControlledBy(child.obj, scalev1alpha1.GroupVersion.String(), "SimInstance", current.Name, current.UID)).
 				To(BeTrue(), "%T %s owner = %+v", child.obj, child.name, child.obj.GetOwnerReferences())
 		}
 	})
@@ -132,7 +133,7 @@ var _ = Describe("SimInstance reconciler", func() {
 		startManager(false)
 
 		vm := &virtv1.VirtualMachine{}
-		vmKey := client.ObjectKey{Name: utils.VirtualMachineName(fleet.Name, 0), Namespace: fleet.Namespace}
+		vmKey := client.ObjectKey{Name: naming.VirtualMachineName(fleet.Name, 0), Namespace: fleet.Namespace}
 		Eventually(func(g Gomega) {
 			g.Expect(k8sClient.Get(ctx, vmKey, vm)).To(Succeed())
 		}, 30*time.Second, 100*time.Millisecond).Should(Succeed())
@@ -140,7 +141,7 @@ var _ = Describe("SimInstance reconciler", func() {
 		dpu := provisionDPU(fleet, 0)
 		configureKubelet(dpu)
 		joinSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.KubeadmJoinSecretName(dpu.Name),
+			Name:      naming.KubeadmJoinSecretName(dpu.Name),
 			Namespace: fleet.Namespace,
 		}}
 		Expect(k8sClient.Create(ctx, joinSecret)).To(Succeed())
@@ -215,7 +216,7 @@ var _ = Describe("SimInstance readiness", func() {
 		startFleetManager()
 
 		vm := &virtv1.VirtualMachine{}
-		vmKey := client.ObjectKey{Name: utils.VirtualMachineName(fleet.Name, 0), Namespace: fleet.Namespace}
+		vmKey := client.ObjectKey{Name: naming.VirtualMachineName(fleet.Name, 0), Namespace: fleet.Namespace}
 		Eventually(func(g Gomega) {
 			g.Expect(k8sClient.Get(ctx, vmKey, vm)).To(Succeed())
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
@@ -242,7 +243,7 @@ var _ = Describe("SimInstance readiness", func() {
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
 		device := &provisioningv1.DPUDevice{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{
-			Name: utils.DeviceName(fleet.Name, 0), Namespace: fleet.Namespace,
+			Name: naming.DeviceName(fleet.Name, 0), Namespace: fleet.Namespace,
 		}, device)).To(Succeed())
 		Expect(ready.Status.ObservedUIDs).To(Equal(scalev1alpha1.ObservedUIDs{
 			DPU:                    string(dpu.UID),

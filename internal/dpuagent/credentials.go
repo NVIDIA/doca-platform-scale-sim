@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package dpuagent
 
 import (
 	"context"
@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 const (
@@ -90,32 +90,36 @@ func (i *serviceAccountTokenIssuer) Issue(
 	return []byte(result.Status.Token), nil
 }
 
-// dpuAgentCredentialName is the identity every per-ordinal credential resource
+// CredentialName is the identity every per-ordinal credential resource
 // carries: the name DPF will give the DPU. The guest is issued this identity
 // while the VM is created, which is before the DPU exists, so it cannot be read
 // off a DPU object.
-func dpuAgentCredentialName(fleet *scalev1alpha1.SimFleet, ordinal int) string {
-	return utils.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal)
+func CredentialName(fleet *scalev1alpha1.SimFleet, ordinal int) string {
+	return naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal)
 }
 
-func desiredDPUAgentServiceAccount(
+// DesiredServiceAccount is the identity the guest for ordinal authenticates
+// to the management cluster as.
+func DesiredServiceAccount(
 	fleet *scalev1alpha1.SimFleet,
 	ordinal int,
 ) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dpuAgentCredentialName(fleet, ordinal),
+			Name:      CredentialName(fleet, ordinal),
 			Namespace: fleet.Namespace,
 			Labels:    dpuAgentCredentialLabels(fleet, ordinal),
 		},
 	}
 }
 
-func desiredDPUAgentRole(
+// DesiredRole grants the guest for ordinal read access to its own DPU and
+// that DPU's join Secret, and nothing else.
+func DesiredRole(
 	fleet *scalev1alpha1.SimFleet,
 	ordinal int,
 ) *rbacv1.Role {
-	name := dpuAgentCredentialName(fleet, ordinal)
+	name := CredentialName(fleet, ordinal)
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -135,18 +139,19 @@ func desiredDPUAgentRole(
 			{
 				APIGroups:     []string{""},
 				Resources:     []string{"secrets"},
-				ResourceNames: []string{utils.KubeadmJoinSecretName(name)},
+				ResourceNames: []string{naming.KubeadmJoinSecretName(name)},
 				Verbs:         []string{"get"},
 			},
 		},
 	}
 }
 
-func desiredDPUAgentRoleBinding(
+// DesiredRoleBinding binds DesiredRole to DesiredServiceAccount.
+func DesiredRoleBinding(
 	fleet *scalev1alpha1.SimFleet,
 	ordinal int,
 ) *rbacv1.RoleBinding {
-	name := dpuAgentCredentialName(fleet, ordinal)
+	name := CredentialName(fleet, ordinal)
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -170,10 +175,12 @@ func dpuAgentCredentialLabels(
 	fleet *scalev1alpha1.SimFleet,
 	ordinal int,
 ) map[string]string {
-	return inventoryLabels(fleet, fmt.Sprintf("%06d", ordinal))
+	return naming.InventoryLabels(fleet, fmt.Sprintf("%06d", ordinal))
 }
 
-func managementKubeconfig(token, ca []byte) ([]byte, error) {
+// ManagementKubeconfig encodes a kubeconfig that reaches the management
+// cluster's in-cluster Service with token and nothing else.
+func ManagementKubeconfig(token, ca []byte) ([]byte, error) {
 	if len(token) == 0 {
 		return nil, errors.New("management ServiceAccount token is empty")
 	}
@@ -240,7 +247,9 @@ func credentialKind(object client.Object) (string, error) {
 	}
 }
 
-func emptyCredentialResource(object client.Object) (client.Object, string, error) {
+// EmptyCredentialResource returns a zero object of the same type as object,
+// to read the live resource into, and its kind.
+func EmptyCredentialResource(object client.Object) (client.Object, string, error) {
 	kind, err := credentialKind(object)
 	if err != nil {
 		return nil, "", err

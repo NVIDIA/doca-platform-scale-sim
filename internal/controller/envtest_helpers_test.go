@@ -36,7 +36,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 func virtualMachineFleet(name, namespace string) *scalev1alpha1.SimFleet {
@@ -111,20 +113,20 @@ type ordinalChild struct {
 
 // ordinalChildren are the objects a SimInstance creates for its ordinal.
 func ordinalChildren(fleet *scalev1alpha1.SimFleet, ordinal int) []ordinalChild {
-	credentialName := dpuAgentCredentialName(fleet, ordinal)
+	credentialName := dpuagent.CredentialName(fleet, ordinal)
 	return []ordinalChild{
 		{credentialName, &corev1.ServiceAccount{}},
 		{credentialName, &rbacv1.Role{}},
 		{credentialName, &rbacv1.RoleBinding{}},
-		{utils.CloudInitSecretName(fleet.Name, ordinal), &corev1.Secret{}},
-		{utils.DeviceName(fleet.Name, ordinal), &provisioningv1.DPUDevice{}},
-		{utils.VirtualMachineName(fleet.Name, ordinal), &virtv1.VirtualMachine{}},
+		{naming.CloudInitSecretName(fleet.Name, ordinal), &corev1.Secret{}},
+		{naming.DeviceName(fleet.Name, ordinal), &provisioningv1.DPUDevice{}},
+		{naming.VirtualMachineName(fleet.Name, ordinal), &virtv1.VirtualMachine{}},
 	}
 }
 
 func getFleetInstance(g Gomega, fleet *scalev1alpha1.SimFleet, ordinal int) *scalev1alpha1.SimInstance {
 	instance := &scalev1alpha1.SimInstance{}
-	key := client.ObjectKey{Name: utils.InstanceName(fleet.Name, ordinal), Namespace: fleet.Namespace}
+	key := client.ObjectKey{Name: naming.InstanceName(fleet.Name, ordinal), Namespace: fleet.Namespace}
 	g.Expect(k8sClient.Get(ctx, key, instance)).To(Succeed())
 	return instance
 }
@@ -162,7 +164,7 @@ func bootGuest(vm *virtv1.VirtualMachine, address string) *virtv1.VirtualMachine
 		Spec: virtv1.VirtualMachineInstanceSpec{Domain: virtv1.DomainSpec{Devices: virtv1.Devices{}}},
 		Status: virtv1.VirtualMachineInstanceStatus{
 			Phase:      virtv1.Running,
-			Interfaces: []virtv1.VirtualMachineInstanceNetworkInterface{{Name: bridgedNetworkName, IP: address}},
+			Interfaces: []virtv1.VirtualMachineInstanceNetworkInterface{{Name: kubevirt.BridgedNetworkName, IP: address}},
 			Conditions: []virtv1.VirtualMachineInstanceCondition{{
 				Type:   virtv1.VirtualMachineInstanceReady,
 				Status: corev1.ConditionTrue,

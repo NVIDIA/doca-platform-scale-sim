@@ -33,7 +33,12 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/cloudinit"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpf"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/ownership"
 )
 
 // instanceChildren are the objects one converge pass found in place. A nil
@@ -104,7 +109,7 @@ func (r *SimInstanceReconciler) ensureInstanceCredentials(
 	instance *scalev1alpha1.SimInstance,
 ) (bool, error) {
 	tmpl := fleet.Spec.VirtualMachineTemplate
-	if tmpl == nil || validateVirtualMachineTemplate(tmpl) != nil {
+	if tmpl == nil || kubevirt.ValidateTemplate(tmpl) != nil {
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceCredentialsReady, true,
 			"NotRequired", "No guest boots from this instance")
 		return false, nil
@@ -150,11 +155,11 @@ func (r *SimInstanceReconciler) ensureInstanceAgentAccess(
 	var serviceAccount *corev1.ServiceAccount
 	ready := true
 	for _, desired := range []client.Object{
-		desiredDPUAgentServiceAccount(fleet, ordinal),
-		desiredDPUAgentRole(fleet, ordinal),
-		desiredDPUAgentRoleBinding(fleet, ordinal),
+		dpuagent.DesiredServiceAccount(fleet, ordinal),
+		dpuagent.DesiredRole(fleet, ordinal),
+		dpuagent.DesiredRoleBinding(fleet, ordinal),
 	} {
-		current, kind, err := emptyCredentialResource(desired)
+		current, kind, err := dpuagent.EmptyCredentialResource(desired)
 		if err != nil {
 			return nil, false, err
 		}
@@ -187,7 +192,7 @@ func (r *SimInstanceReconciler) ensureInstanceCloudInitSecret(
 ) (bool, error) {
 	ordinal := instance.Spec.Ordinal
 	secret := &corev1.Secret{}
-	key := client.ObjectKey{Name: utils.CloudInitSecretName(fleet.Name, ordinal), Namespace: fleet.Namespace}
+	key := client.ObjectKey{Name: naming.CloudInitSecretName(fleet.Name, ordinal), Namespace: fleet.Namespace}
 	found, err := r.getChild(ctx, key, secret, "Secret")
 	if err == nil && !found {
 		found, err = r.getLiveChild(ctx, key, secret, "Secret")
@@ -196,7 +201,7 @@ func (r *SimInstanceReconciler) ensureInstanceCloudInitSecret(
 		return false, err
 	}
 	if found {
-		return true, r.syncChildLabels(ctx, instance, secret, cloudInitSecretLabels(fleet, ordinal), "Secret")
+		return true, r.syncChildLabels(ctx, instance, secret, cloudinit.SecretLabels(fleet, ordinal), "Secret")
 	}
 	desired, err := r.renderInstanceCloudInitSecret(ctx, fleet, ordinal, serviceAccount)
 	if err != nil || desired == nil {
@@ -214,33 +219,33 @@ func (r *SimInstanceReconciler) renderInstanceCloudInitSecret(
 	ordinal int,
 	serviceAccount *corev1.ServiceAccount,
 ) (*corev1.Secret, error) {
-	if !dpuAgentEnabled(fleet) {
-		return desiredCloudInitSecret(fleet, ordinal, nil)
+	if !dpuagent.Enabled(fleet) {
+		return cloudinit.DesiredSecret(fleet, ordinal, nil)
 	}
 	if serviceAccount == nil || serviceAccount.UID == "" {
 		return nil, nil
 	}
 	// Everything but the token is validated first, so a payload that can
 	// never be written costs no credential.
-	preflight, err := managementKubeconfig([]byte("preflight"), r.ManagementCA)
+	preflight, err := dpuagent.ManagementKubeconfig([]byte("preflight"), r.ManagementCA)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := desiredCloudInitSecret(fleet, ordinal, preflight); err != nil {
+	if _, err := cloudinit.DesiredSecret(fleet, ordinal, preflight); err != nil {
 		return nil, err
 	}
 	if r.ServiceAccountTokenIssuer == nil {
 		return nil, errors.New("management ServiceAccount token issuer is not configured")
 	}
-	token, err := r.ServiceAccountTokenIssuer.Issue(ctx, fleet.Namespace, dpuAgentCredentialName(fleet, ordinal))
+	token, err := r.ServiceAccountTokenIssuer.Issue(ctx, fleet.Namespace, dpuagent.CredentialName(fleet, ordinal))
 	if err != nil {
 		return nil, fmt.Errorf("could not issue per-DPU management credentials: %w", err)
 	}
-	kubeconfig, err := managementKubeconfig(token, r.ManagementCA)
+	kubeconfig, err := dpuagent.ManagementKubeconfig(token, r.ManagementCA)
 	if err != nil {
 		return nil, err
 	}
-	return desiredCloudInitSecret(fleet, ordinal, kubeconfig)
+	return cloudinit.DesiredSecret(fleet, ordinal, kubeconfig)
 }
 
 func (r *SimInstanceReconciler) ensureInstanceDevice(
@@ -249,7 +254,7 @@ func (r *SimInstanceReconciler) ensureInstanceDevice(
 	instance *scalev1alpha1.SimInstance,
 ) (*provisioningv1.DPUDevice, error) {
 	live, err := r.ensureOwnedChild(ctx, instance,
-		desiredDevice(fleet, instance.Spec.Ordinal), &provisioningv1.DPUDevice{}, "DPUDevice")
+		dpf.DesiredDevice(fleet, instance.Spec.Ordinal), &provisioningv1.DPUDevice{}, "DPUDevice")
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +281,7 @@ func (r *SimInstanceReconciler) ensureInstanceVirtualMachine(
 ) (*virtv1.VirtualMachine, error) {
 	tmpl := fleet.Spec.VirtualMachineTemplate
 	if tmpl != nil {
-		if err := validateVirtualMachineTemplate(tmpl); err != nil {
+		if err := kubevirt.ValidateTemplate(tmpl); err != nil {
 			return nil, err
 		}
 	}
@@ -299,7 +304,7 @@ func (r *SimInstanceReconciler) ensureInstanceVirtualMachine(
 		return nil, nil
 	}
 	live, err := r.ensureOwnedChild(ctx, instance,
-		desiredVirtualMachine(fleet, instance.Spec.Ordinal), &virtv1.VirtualMachine{}, "VirtualMachine")
+		kubevirt.DesiredVirtualMachine(fleet, instance.Spec.Ordinal), &virtv1.VirtualMachine{}, "VirtualMachine")
 	if err != nil {
 		return nil, err
 	}
@@ -341,8 +346,8 @@ func guestBelongsToInstance(
 	vmi *virtv1.VirtualMachineInstance,
 ) bool {
 	return vm != nil && vmi != nil &&
-		controlledBy(vm, scalev1alpha1.GroupVersion.String(), "SimInstance", instance.Name, instance.UID) &&
-		controlledBy(vmi, virtv1.GroupVersion.String(), "VirtualMachine", vm.Name, vm.UID)
+		ownership.ControlledBy(vm, scalev1alpha1.GroupVersion.String(), "SimInstance", instance.Name, instance.UID) &&
+		ownership.ControlledBy(vmi, virtv1.GroupVersion.String(), "VirtualMachine", vm.Name, vm.UID)
 }
 
 // ensureInstanceBMCIP publishes the guest's BMC address and the selection
@@ -369,7 +374,7 @@ func (r *SimInstanceReconciler) ensureInstanceBMCIP(
 	log := logf.FromContext(ctx)
 	address := ""
 	if guestBelongsToInstance(instance, children.vm, children.vmi) {
-		address = guestBridgedIPv4(children.vmi)
+		address = kubevirt.GuestBridgedIPv4(children.vmi)
 	} else if children.vmi != nil {
 		log.V(1).Info("Ignored a VirtualMachineInstance this SimInstance does not own",
 			"virtualMachineInstance", children.vmi.Name)
@@ -377,8 +382,8 @@ func (r *SimInstanceReconciler) ensureInstanceBMCIP(
 	if address != "" {
 		base := device.DeepCopy()
 		device.Spec.BMCIP = &address
-		mergeLabels(device, deviceSelectionLabels(fleet))
-		mergeLabels(device, deviceLabels(fleet, instance.Spec.Ordinal))
+		mergeLabels(device, dpf.DeviceSelectionLabels(fleet))
+		mergeLabels(device, dpf.DeviceLabels(fleet, instance.Spec.Ordinal))
 		previous := ptr.Deref(base.Spec.BMCIP, "")
 		if !inventoryMetadataUnchanged(base, device) || previous != address {
 			if err := r.Patch(ctx, device, client.MergeFrom(base)); err != nil {
@@ -406,7 +411,7 @@ func deviceSelectable(fleet *scalev1alpha1.SimFleet, device *provisioningv1.DPUD
 	if ptr.Deref(device.Spec.BMCIP, "") == "" {
 		return false
 	}
-	for key, value := range deviceSelectionLabels(fleet) {
+	for key, value := range dpf.DeviceSelectionLabels(fleet) {
 		if device.Labels[key] != value {
 			return false
 		}
@@ -439,7 +444,7 @@ func (r *SimInstanceReconciler) observeInstanceDPU(
 	fleet *scalev1alpha1.SimFleet,
 	instance *scalev1alpha1.SimInstance,
 ) (*provisioningv1.DPU, error) {
-	deviceName := utils.DeviceName(fleet.Name, instance.Spec.Ordinal)
+	deviceName := naming.DeviceName(fleet.Name, instance.Spec.Ordinal)
 	list := &provisioningv1.DPUList{}
 	if err := r.List(ctx, list,
 		client.InNamespace(instance.Namespace),
@@ -578,7 +583,7 @@ func (r *SimInstanceReconciler) syncChildLabels(
 	labels map[string]string,
 	kind string,
 ) error {
-	if err := validateControlledBy(obj, instance, "SimInstance", kind); err != nil {
+	if err := ownership.ValidateControlledBy(obj, instance, "SimInstance", kind); err != nil {
 		return err
 	}
 	base := obj.DeepCopyObject().(client.Object)

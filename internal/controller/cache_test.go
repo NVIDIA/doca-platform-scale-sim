@@ -29,6 +29,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 var _ = Describe("Manager cache", func() {
@@ -39,7 +41,7 @@ var _ = Describe("Manager cache", func() {
 		labelled := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 			Name:      "labelled",
 			Namespace: namespace.Name,
-			Labels:    map[string]string{labelFleetName: "scale-3000"},
+			Labels:    map[string]string{naming.LabelFleetName: "scale-3000"},
 		}}
 		unlabelled := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 			Name:      "unlabelled",
