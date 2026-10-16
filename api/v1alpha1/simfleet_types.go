@@ -362,6 +362,7 @@ type SimFleetStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:metadata:annotations=helm.sh/resource-policy=keep
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=".spec.replicas"
 // +kubebuilder:printcolumn:name="Admitted",type=integer,JSONPath=".status.admittedReplicas"
 // +kubebuilder:printcolumn:name="Provisioned",type=integer,JSONPath=".status.provisionedInstances"

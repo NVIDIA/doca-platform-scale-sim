@@ -1,0 +1,48 @@
+# -- controllerManager configures the SimFleet controller Deployment.
+controllerManager:
+  # -- containerSecurityContext sets the securityContext applied to the controller container.
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+  # -- podSecurityContext sets the pod-level securityContext for the controller Pod.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  image:
+    # -- image.repository is the controller container image, built with `make docker-build`.
+    repository: ghcr.io/nvidia/doca-platform-scale-sim/simfleet-controller
+    # -- image.tag is the controller image tag. Defaults to the chart appVersion when empty.
+    tag: ""
+  # -- pullPolicy is the imagePullPolicy used for the controller container.
+  pullPolicy: IfNotPresent
+  # -- replicas is the number of controller Pods to run. Only the leader reconciles.
+  replicas: 1
+  # -- simFleetMaxConcurrentReconciles is how many SimFleets are reconciled at once.
+  simFleetMaxConcurrentReconciles: 1
+  # -- simInstanceMaxConcurrentReconciles is how many SimInstances are reconciled at once. One SimInstance is one DPU ordinal.
+  simInstanceMaxConcurrentReconciles: 25
+  # -- resources are the container resources of the controller.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+  # -- serviceAccount configures the controller ServiceAccount.
+  serviceAccount:
+    # -- annotations added to the controller ServiceAccount.
+    annotations: {}
+# -- imagePullSecrets is a list of Secret references used to pull the controller image from private registries.
+imagePullSecrets: []
+# -- nodeSelector places the controller Pod.
+nodeSelector: {}
+# -- tolerations of the controller Pod.
+tolerations: []
+# -- affinity of the controller Pod.
+affinity: {}

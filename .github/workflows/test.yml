@@ -31,12 +31,14 @@ jobs:
           path: bin
           key: ${{ runner.os }}-bin-${{ hashFiles('go.mod', 'Makefile') }}
 
+      - name: Lint the Go code
+        run: make lint
+
+      - name: Lint the Helm chart
+        run: make lint-helm
+
+      - name: Verify generated files and the rendered Helm chart
+        run: make verify
+
       - name: Run unit tests
         run: make test
-
-      - name: Check generated code and formatting are up to date
-        run: |
-          git diff --exit-code || {
-            echo "::error::'make test' modified tracked files; run 'make manifests generate fmt' and commit the result."
-            exit 1
-          }

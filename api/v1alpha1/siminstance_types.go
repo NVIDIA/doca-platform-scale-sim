@@ -84,6 +84,7 @@ type SimInstanceStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=smi
+// +kubebuilder:metadata:annotations=helm.sh/resource-policy=keep
 // +kubebuilder:printcolumn:name="Ordinal",type=integer,JSONPath=".spec.ordinal"
 // +kubebuilder:printcolumn:name="Host",type=integer,JSONPath=".spec.hostIndex"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
