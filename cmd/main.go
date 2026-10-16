@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Command doca-platform-scale-sim runs the controller manager that reconciles
+// SimFleets and SimInstances against a DPF management cluster.
 package main
 
 import (
@@ -38,6 +40,7 @@ import (
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/controller"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -119,7 +122,7 @@ func main() {
 	}
 
 	managementConfig := ctrl.GetConfigOrDie()
-	managementCA, err := controller.ManagementClusterCA(managementConfig)
+	managementCA, err := dpuagent.ManagementClusterCA(managementConfig)
 	if err != nil {
 		setupLog.Error(err, "Failed to load management cluster CA")
 		os.Exit(1)
@@ -163,7 +166,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	tokenIssuer := controller.NewServiceAccountTokenIssuer(mgr.GetClient())
+	tokenIssuer := dpuagent.NewServiceAccountTokenIssuer(mgr.GetClient())
 	recorder := mgr.GetEventRecorder("siminstance")
 	if err := (&controller.SimInstanceReconciler{
 		Client:                    mgr.GetClient(),

@@ -31,7 +31,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpf"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 // admitBatch is how many ordinals one admission step adds to the rollout.
@@ -48,7 +49,7 @@ func (r *SimFleetReconciler) listInstances(
 	list := &scalev1alpha1.SimInstanceList{}
 	if err := r.List(ctx, list,
 		client.InNamespace(fleet.Namespace),
-		client.MatchingLabels{labelFleetName: fleet.Name},
+		client.MatchingLabels{naming.LabelFleetName: fleet.Name},
 		client.UnsafeDisableDeepCopy,
 	); err != nil {
 		return nil, fmt.Errorf("list SimInstances for SimFleet %q: %w", fleet.Name, err)
@@ -68,16 +69,16 @@ func (r *SimFleetReconciler) listInstances(
 func desiredInstance(fleet *scalev1alpha1.SimFleet, ordinal int) *scalev1alpha1.SimInstance {
 	return &scalev1alpha1.SimInstance{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.InstanceName(fleet.Name, ordinal),
+			Name:      naming.InstanceName(fleet.Name, ordinal),
 			Namespace: fleet.Namespace,
-			Labels:    inventoryLabels(fleet, fmt.Sprintf("%06d", ordinal)),
+			Labels:    naming.InventoryLabels(fleet, fmt.Sprintf("%06d", ordinal)),
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(fleet, scalev1alpha1.GroupVersion.WithKind("SimFleet")),
 			},
 		},
 		Spec: scalev1alpha1.SimInstanceSpec{
 			Ordinal:   ordinal,
-			HostIndex: utils.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode),
+			HostIndex: naming.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode),
 		},
 	}
 }
@@ -264,8 +265,8 @@ func (r *SimFleetReconciler) reconcileDPUNodes(
 	instances map[int]*scalev1alpha1.SimInstance,
 ) (int, error) {
 	nodes := 0
-	for hostIndex := range utils.DesiredNodeCount(admitted, fleet.Spec.DevicesPerDPUNode) {
-		start, end := utils.HostOrdinalRange(hostIndex, fleet.Spec.DevicesPerDPUNode, admitted)
+	for hostIndex := range naming.DesiredNodeCount(admitted, fleet.Spec.DevicesPerDPUNode) {
+		start, end := naming.HostOrdinalRange(hostIndex, fleet.Spec.DevicesPerDPUNode, admitted)
 		if !instancesHave(instances, start, end, scalev1alpha1.SimInstanceDeviceCreated) {
 			exists, err := r.nodeExists(ctx, fleet, hostIndex)
 			if err != nil {
@@ -276,7 +277,7 @@ func (r *SimFleetReconciler) reconcileDPUNodes(
 			}
 			continue
 		}
-		ready, err := r.ensureNode(ctx, fleet, desiredHostNode(fleet, hostIndex, admitted), true)
+		ready, err := r.ensureNode(ctx, fleet, dpf.DesiredHostNode(fleet, hostIndex, admitted), true)
 		if err != nil {
 			return nodes, err
 		}
@@ -288,7 +289,7 @@ func (r *SimFleetReconciler) reconcileDPUNodes(
 }
 
 func (r *SimFleetReconciler) nodeExists(ctx context.Context, fleet *scalev1alpha1.SimFleet, hostIndex int) (bool, error) {
-	name := utils.NodeName(fleet.Name, hostIndex)
+	name := naming.NodeName(fleet.Name, hostIndex)
 	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: fleet.Namespace}, &provisioningv1.DPUNode{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
@@ -379,7 +380,7 @@ func (r *SimFleetReconciler) updateNodeIfNeeded(
 		return false, fmt.Errorf("set DPUNode %q owner: %w", node.Name, err)
 	}
 	if devicesReady {
-		node.Spec.DPUs = appendMissingDPUs(node.Spec.DPUs, desired.Spec.DPUs)
+		node.Spec.DPUs = dpf.AppendMissingDPUs(node.Spec.DPUs, desired.Spec.DPUs)
 	}
 	if inventoryMetadataUnchanged(base, node) &&
 		equality.Semantic.DeepEqual(base.Spec.DPUs, node.Spec.DPUs) {
@@ -400,65 +401,4 @@ func validateCanAdopt(obj client.Object, fleet *scalev1alpha1.SimFleet, kind str
 		return fmt.Errorf("%s %q is controlled by another owner", kind, obj.GetName())
 	}
 	return nil
-}
-
-// desiredHostNode lists the host's devices among the first replicas ordinals,
-// so a host the rollout has only partly admitted gets only those devices.
-func desiredHostNode(fleet *scalev1alpha1.SimFleet, hostIndex, replicas int) *provisioningv1.DPUNode {
-	start, end := utils.HostOrdinalRange(hostIndex, fleet.Spec.DevicesPerDPUNode, replicas)
-	dpus := make([]provisioningv1.DPURef, 0, end-start)
-	for ordinal := start; ordinal < end; ordinal++ {
-		dpus = append(dpus, provisioningv1.DPURef{Name: utils.DeviceName(fleet.Name, ordinal)})
-	}
-	return &provisioningv1.DPUNode{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.NodeName(fleet.Name, hostIndex),
-			Namespace: fleet.Namespace,
-			Labels:    nodeLabels(fleet, hostIndex),
-		},
-		Spec: provisioningv1.DPUNodeSpec{
-			DPUs:             dpus,
-			NodeRebootMethod: nodeRebootMethod(fleet),
-		},
-	}
-}
-
-func nodeRebootMethod(fleet *scalev1alpha1.SimFleet) *provisioningv1.NodeRebootMethod {
-	if fleet.Spec.DPUNodeTemplate != nil && fleet.Spec.DPUNodeTemplate.Spec.NodeRebootMethod != nil {
-		return fleet.Spec.DPUNodeTemplate.Spec.NodeRebootMethod.DeepCopy()
-	}
-	return &provisioningv1.NodeRebootMethod{
-		External: &provisioningv1.External{},
-	}
-}
-
-func nodeLabels(fleet *scalev1alpha1.SimFleet, hostIndex int) map[string]string {
-	labels := map[string]string{}
-	if fleet.Spec.DPUNodeTemplate != nil {
-		maps.Copy(labels, fleet.Spec.DPUNodeTemplate.Metadata.Labels)
-	}
-	maps.Copy(labels, inventoryLabels(fleet, fmt.Sprintf("%04d", hostIndex)))
-	return labels
-}
-
-// appendMissingDPUs returns existing plus every desired ref it does not already
-// list. Existing members survive in place, so a ref DPF or an operator added
-// stays and membership only grows. A plain overwrite would fight whoever wrote
-// those extra refs; refusing to touch a node whose refs were replaced would
-// leave the host short of a device forever, because nothing would ever put the
-// desired ref back.
-func appendMissingDPUs(existing, desired []provisioningv1.DPURef) []provisioningv1.DPURef {
-	members := make(map[string]struct{}, len(existing))
-	for _, dpu := range existing {
-		members[dpu.Name] = struct{}{}
-	}
-	merged := append([]provisioningv1.DPURef(nil), existing...)
-	for _, dpu := range desired {
-		if _, listed := members[dpu.Name]; listed {
-			continue
-		}
-		merged = append(merged, dpu)
-		members[dpu.Name] = struct{}{}
-	}
-	return merged
 }

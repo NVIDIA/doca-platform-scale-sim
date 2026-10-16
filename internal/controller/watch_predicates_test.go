@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 func fleetControllerReference() metav1.OwnerReference {
@@ -50,9 +51,9 @@ func fleetDevice() *provisioningv1.DPUDevice {
 			Name:      "scale-3000-device-000000",
 			Namespace: "default",
 			Labels: map[string]string{
-				labelFleetName: "scale-3000",
-				labelFleetUID:  "fleet-uid",
-				labelOrdinal:   "000000",
+				naming.LabelFleetName: "scale-3000",
+				naming.LabelFleetUID:  "fleet-uid",
+				naming.LabelOrdinal:   "000000",
 			},
 			OwnerReferences: []metav1.OwnerReference{fleetControllerReference()},
 			ResourceVersion: "1",
@@ -70,9 +71,9 @@ func fleetNode() *provisioningv1.DPUNode {
 			Name:      "scale-3000-host-0000",
 			Namespace: "default",
 			Labels: map[string]string{
-				labelFleetName: "scale-3000",
-				labelFleetUID:  "fleet-uid",
-				labelOrdinal:   "0000",
+				naming.LabelFleetName: "scale-3000",
+				naming.LabelFleetUID:  "fleet-uid",
+				naming.LabelOrdinal:   "0000",
 			},
 			OwnerReferences: []metav1.OwnerReference{fleetControllerReference()},
 			Finalizers:      []string{"provisioning.dpu.nvidia.com/dpunode-protection"},
@@ -151,9 +152,9 @@ func fleetSecret() *corev1.Secret {
 			Name:      "scale-3000-dpu-000000-cloud-init",
 			Namespace: "default",
 			Labels: map[string]string{
-				labelFleetName: "scale-3000",
-				labelFleetUID:  "fleet-uid",
-				labelOrdinal:   "000000",
+				naming.LabelFleetName: "scale-3000",
+				naming.LabelFleetUID:  "fleet-uid",
+				naming.LabelOrdinal:   "000000",
 			},
 			OwnerReferences: []metav1.OwnerReference{fleetControllerReference()},
 			ResourceVersion: "1",
@@ -220,10 +221,10 @@ var _ = Describe("Watch predicates", func() {
 				})
 			}), false),
 			Entry("DPUDevice fleet label removed", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
-				delete(d.Labels, labelOrdinal)
+				delete(d.Labels, naming.LabelOrdinal)
 			}), true),
 			Entry("DPUNode fleet label overwritten", fleetNode(), updatedNode(func(n *provisioningv1.DPUNode) {
-				n.Labels[labelFleetUID] = "other-uid"
+				n.Labels[naming.LabelFleetUID] = "other-uid"
 			}), true),
 			Entry("DPUDevice controller reference removed", fleetDevice(), updatedDevice(func(d *provisioningv1.DPUDevice) {
 				d.OwnerReferences = nil
@@ -474,7 +475,7 @@ var _ = Describe("Watch predicates", func() {
 				secret.Annotations = map[string]string{"example.com/noise": "value"}
 			}}, false),
 			Entry("fleet label removed", watchUpdate[*corev1.Secret]{mutate: func(secret *corev1.Secret) {
-				delete(secret.Labels, labelFleetUID)
+				delete(secret.Labels, naming.LabelFleetUID)
 			}}, true),
 			Entry("controller owner changed", watchUpdate[*corev1.Secret]{mutate: func(secret *corev1.Secret) {
 				secret.OwnerReferences[0].Name = "other-fleet"

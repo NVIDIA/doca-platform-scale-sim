@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package kubevirt
 
 import (
 	"encoding/json"
@@ -30,10 +30,11 @@ import (
 	virtv1 "kubevirt.io/api/core/v1"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 var _ = Describe("VirtualMachine", func() {
-	Describe("desiredVirtualMachine", func() {
+	Describe("DesiredVirtualMachine", func() {
 		It("renders the identity, labels, scheduling, devices and volumes from the template", func() {
 			requests := corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("4"),
@@ -63,7 +64,7 @@ var _ = Describe("VirtualMachine", func() {
 						Metadata: scalev1alpha1.TemplateMetadata{
 							Labels: map[string]string{
 								"example.com/template": "true",
-								labelOrdinal:           "template-must-not-win",
+								naming.LabelOrdinal:    "template-must-not-win",
 							},
 						},
 						NodeSelector: nodeSelector,
@@ -72,16 +73,16 @@ var _ = Describe("VirtualMachine", func() {
 				},
 			}
 
-			vm := desiredVirtualMachine(fleet, 0)
+			vm := DesiredVirtualMachine(fleet, 0)
 
 			Expect(vm.Name).To(Equal("scale-3000-dpu-000000"))
 			Expect(vm.Namespace).To(Equal("ns"))
 			Expect(vm.Spec.RunStrategy).To(HaveValue(Equal(virtv1.RunStrategyAlways)))
 			wantLabels := map[string]string{
 				"example.com/template": "true",
-				labelFleetName:         "scale-3000",
-				labelFleetUID:          "uid",
-				labelOrdinal:           "000000",
+				naming.LabelFleetName:  "scale-3000",
+				naming.LabelFleetUID:   "uid",
+				naming.LabelOrdinal:    "000000",
 			}
 			Expect(vm.Labels).To(Equal(wantLabels), "VM labels")
 			Expect(vm.Spec.Template).NotTo(BeNil())
@@ -93,9 +94,9 @@ var _ = Describe("VirtualMachine", func() {
 			Expect(spec.NodeSelector).To(Equal(nodeSelector))
 			Expect(spec.Tolerations).To(Equal(tolerations))
 
-			// Two disks, not three. The guest reads DPF's per-DPU join Secret with
-			// the credential in its cloud-init payload, so there is no fleet-wide
-			// join material left to hand it on a disk.
+			// The guest gets only its boot image and its cloud-init payload. Join
+			// material reaches it through the per-DPU credential in cloud-init,
+			// never on a disk shared across the fleet.
 			disks := spec.Domain.Devices.Disks
 			Expect(disks).To(HaveLen(2))
 			for i, name := range []string{"containerdisk", "cloud-init"} {
@@ -143,7 +144,7 @@ var _ = Describe("VirtualMachine", func() {
 				},
 			}
 
-			Expect(desiredVirtualMachine(fleet, 0).Spec.Template.Spec.Architecture).To(Equal("arm64"))
+			Expect(DesiredVirtualMachine(fleet, 0).Spec.Template.Spec.Architecture).To(Equal("arm64"))
 		})
 
 		// KubeVirt v1.9 rejects a VMI with no memory, so an omitted or partial
@@ -158,7 +159,7 @@ var _ = Describe("VirtualMachine", func() {
 				},
 			}
 
-			requests := desiredVirtualMachine(fleet, 0).Spec.Template.Spec.Domain.Resources.Requests
+			requests := DesiredVirtualMachine(fleet, 0).Spec.Template.Spec.Domain.Resources.Requests
 
 			memory := requests[corev1.ResourceMemory]
 			Expect(memory.IsZero()).To(BeFalse(), "memory request = %s, want the 1Gi default", memory.String())
@@ -182,7 +183,7 @@ var _ = Describe("VirtualMachine", func() {
 				},
 			}
 
-			requests := desiredVirtualMachine(fleet, 0).Spec.Template.Spec.Domain.Resources.Requests
+			requests := DesiredVirtualMachine(fleet, 0).Spec.Template.Spec.Domain.Resources.Requests
 
 			cpu := requests[corev1.ResourceCPU]
 			Expect(cpu.Cmp(resource.MustParse("8"))).To(BeZero(), "cpu request = %s, want the supplied 8", cpu.String())
@@ -200,20 +201,21 @@ var _ = Describe("VirtualMachine", func() {
 		})
 	})
 
-	Describe("validateVirtualMachineTemplate", func() {
+	Describe("ValidateTemplate", func() {
 		DescribeTable("accepts supported templates and rejects the rest",
 			func(template *scalev1alpha1.VirtualMachineTemplate, wantReason, wantMsg string) {
-				err := validateVirtualMachineTemplate(template)
+				err := ValidateTemplate(template)
 				if wantReason == "" && wantMsg == "" {
 					Expect(err).NotTo(HaveOccurred())
 					return
 				}
 				Expect(err).To(HaveOccurred())
-				Expect(conditionReason(err)).To(Equal(wantReason))
-				if wantReason != "ReconcileError" {
-					var condErr *virtualMachineConditionError
-					Expect(errors.As(err, &condErr)).To(BeTrue(), "error = %T, want *virtualMachineConditionError", err)
-					Expect(condErr.reason).To(Equal(wantReason))
+				var condErr *TemplateError
+				if wantReason == "" {
+					Expect(errors.As(err, &condErr)).To(BeFalse(), "error = %T, want a plain error", err)
+				} else {
+					Expect(errors.As(err, &condErr)).To(BeTrue(), "error = %T, want *TemplateError", err)
+					Expect(condErr.Reason).To(Equal(wantReason))
 				}
 				if wantMsg != "" {
 					Expect(err).To(MatchError(ContainSubstring(wantMsg)))
@@ -230,7 +232,7 @@ var _ = Describe("VirtualMachine", func() {
 				&scalev1alpha1.VirtualMachineTemplate{Image: "img", RunStrategy: string(virtv1.RunStrategyOnce)}, "", ""),
 			Entry("RerunOnFailure run strategy",
 				&scalev1alpha1.VirtualMachineTemplate{Image: "img", RunStrategy: string(virtv1.RunStrategyRerunOnFailure)}, "", ""),
-			Entry("empty image", &scalev1alpha1.VirtualMachineTemplate{}, "ReconcileError", "image must not be empty"),
+			Entry("empty image", &scalev1alpha1.VirtualMachineTemplate{}, "", "image must not be empty"),
 			Entry("persistent storage", &scalev1alpha1.VirtualMachineTemplate{
 				Image:   "img",
 				Storage: &scalev1alpha1.VirtualMachineStorage{Ephemeral: ptr.To(false)},

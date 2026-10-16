@@ -21,10 +21,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// SimInstanceFinalizer holds a deleted SimInstance until its children are torn
+// down in order.
+const SimInstanceFinalizer = "scale.dpu.nvidia.com/siminstance"
+
 // SimInstancePhase is the coarse state of one simulated DPU ordinal.
 // +kubebuilder:validation:Enum=Pending;Provisioning;Ready;Failed;Terminating
 type SimInstancePhase string
 
+// The phases a SimInstance moves through.
 const (
 	SimInstancePending      SimInstancePhase = "Pending"
 	SimInstanceProvisioning SimInstancePhase = "Provisioning"
@@ -33,6 +38,7 @@ const (
 	SimInstanceTerminating  SimInstancePhase = "Terminating"
 )
 
+// Condition types reported on SimInstance status.
 const (
 	SimInstanceCredentialsReady = "CredentialsReady"
 	SimInstanceDeviceCreated    = "DeviceCreated"

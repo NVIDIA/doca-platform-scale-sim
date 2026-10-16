@@ -59,8 +59,14 @@ spec:
             description: spec defines the desired state of SimFleet
             properties:
               bootstrap:
+                description: |-
+                  BootstrapSpec records the DPUCluster the fleet's guests are expected to
+                  join. The controller does not read or contact that cluster; it writes the
+                  reference into each guest's identity file. The cluster a guest joins is
+                  decided by the join Secret DPF creates for its DPU.
                 properties:
                   dpuClusterRef:
+                    description: DPUClusterReference names a DPF DPUCluster.
                     properties:
                       name:
                         minLength: 1
@@ -101,6 +107,11 @@ spec:
                 - message: devicesPerDPUNode is immutable
                   rule: self == oldSelf
               dpuAgent:
+                description: |-
+                  DPUAgentSpec configures the mock DPU agent each guest runs. Disabling it
+                  also stops the guest from joining the DPU cluster: the guest gets no agent
+                  configuration and no management credential, and both the agent and the
+                  join unit are masked.
                 properties:
                   bmc:
                     description: |-
@@ -283,8 +294,14 @@ spec:
                     type: string
                 type: object
               dpuDeviceTemplate:
+                description: |-
+                  DPUDeviceTemplate shapes the DPUDevice created for each ordinal. Reserved
+                  device label keys in its labels are silently dropped.
                 properties:
                   metadata:
+                    description: |-
+                      TemplateMetadata is the metadata copied onto the objects a template
+                      renders. Labels never override the controller's own identity labels.
                     properties:
                       labels:
                         additionalProperties:
@@ -292,14 +309,23 @@ spec:
                         type: object
                     type: object
                   spec:
+                    description: |-
+                      DPUDeviceTemplateSpec sets DPUDevice spec fields when the DPUDevice is
+                      created; later edits do not change existing DPUDevices. An unset numberOfPFs
+                      defaults to 1.
                     properties:
                       numberOfPFs:
                         type: integer
                     type: object
                 type: object
               dpuNodeTemplate:
+                description: DPUNodeTemplate shapes the DPUNode the fleet creates
+                  for each host.
                 properties:
                   metadata:
+                    description: |-
+                      TemplateMetadata is the metadata copied onto the objects a template
+                      renders. Labels never override the controller's own identity labels.
                     properties:
                       labels:
                         additionalProperties:
@@ -307,6 +333,10 @@ spec:
                         type: object
                     type: object
                   spec:
+                    description: |-
+                      DPUNodeTemplateSpec sets DPUNode spec fields when the DPUNode is created;
+                      later edits do not change existing DPUNodes. An unset nodeRebootMethod
+                      defaults to external: {}.
                     properties:
                       nodeRebootMethod:
                         description: NodeRebootMethod defines the desired reboot method
@@ -358,6 +388,9 @@ spec:
                 minimum: 0
                 type: integer
               virtualMachineTemplate:
+                description: |-
+                  VirtualMachineTemplate shapes the KubeVirt VirtualMachine that backs each
+                  simulated DPU. A fleet without one boots no guests.
                 properties:
                   architecture:
                     default: amd64
@@ -370,6 +403,9 @@ spec:
                     minLength: 1
                     type: string
                   metadata:
+                    description: |-
+                      TemplateMetadata is the metadata copied onto the objects a template
+                      renders. Labels never override the controller's own identity labels.
                     properties:
                       labels:
                         additionalProperties:
@@ -381,12 +417,19 @@ spec:
                       type: string
                     type: object
                   podNetwork:
+                    description: |-
+                      PodNetwork configures the guest's pod network interface. Only bridge
+                      binding is supported; the controller refuses bridge: false.
                     properties:
                       bridge:
                         default: true
                         type: boolean
                     type: object
                   resources:
+                    description: |-
+                      VirtualMachineResources are the guest's resource requests. A missing cpu
+                      request defaults to 1 and a missing memory request to 1Gi; other requests
+                      pass through unchanged.
                     properties:
                       requests:
                         additionalProperties:
@@ -406,6 +449,10 @@ spec:
                       server, so the status condition can name the strategy that was refused.
                     type: string
                   storage:
+                    description: |-
+                      VirtualMachineStorage describes the guest's root disk. Only ephemeral
+                      container-disk storage is supported; the controller refuses ephemeral: false.
+                      rootDiskSize is accepted but not yet applied.
                     properties:
                       ephemeral:
                         default: true

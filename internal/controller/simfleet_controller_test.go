@@ -30,14 +30,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpf"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 // deletingFleet is a fleet whose delete was accepted while it held the
 // teardown finalizer.
 func deletingFleet(replicas, devicesPerDPUNode, admitted int) *scalev1alpha1.SimFleet {
 	fleet := rolloutFleet(replicas, devicesPerDPUNode, admitted)
-	fleet.Finalizers = []string{simFleetTeardownFinalizer}
+	fleet.Finalizers = []string{scalev1alpha1.SimFleetFinalizer}
 	now := metav1.Now()
 	fleet.DeletionTimestamp = &now
 	return fleet
@@ -46,7 +48,7 @@ func deletingFleet(replicas, devicesPerDPUNode, admitted int) *scalev1alpha1.Sim
 // tearingDownInstance is an instance its own finalizer still holds.
 func tearingDownInstance(fleet *scalev1alpha1.SimFleet, ordinal int, deleting bool) *scalev1alpha1.SimInstance {
 	instance := fleetInstance(fleet, ordinal, scalev1alpha1.SimInstanceReady, scalev1alpha1.SimInstanceChildrenCreated)
-	instance.Finalizers = []string{simInstanceTeardownFinalizer}
+	instance.Finalizers = []string{scalev1alpha1.SimInstanceFinalizer}
 	if deleting {
 		now := metav1.Now()
 		instance.DeletionTimestamp = &now
@@ -62,15 +64,15 @@ var _ = Describe("SimFleet reconcile (fake client)", func() {
 
 			h.reconcile()
 
-			Expect(h.fleet().Finalizers).To(ContainElement(simFleetTeardownFinalizer))
+			Expect(h.fleet().Finalizers).To(ContainElement(scalev1alpha1.SimFleetFinalizer))
 			Expect(h.calls).NotTo(BeEmpty())
-			Expect(h.calls[0]).To(Equal(fmt.Sprintf("finalizers [%s]", simFleetTeardownFinalizer)),
+			Expect(h.calls[0]).To(Equal(call(callFinalizers, fmt.Sprintf("[%s]", scalev1alpha1.SimFleetFinalizer))),
 				"calls = %v, want the finalizer patch before any other write", h.calls)
-			Expect(h.callsWithPrefix("create ")).To(HaveLen(3))
+			Expect(h.callsOf(callCreateInstance)).To(HaveLen(3))
 
 			h.calls = nil
 			h.reconcile()
-			Expect(h.callsWithPrefix("finalizers ")).To(BeEmpty(), "want no finalizer patch once it is present")
+			Expect(h.callsOf(callFinalizers)).To(BeEmpty(), "want no finalizer patch once it is present")
 		})
 
 		Context("when the fleet is deleted", func() {
@@ -88,21 +90,21 @@ var _ = Describe("SimFleet reconcile (fake client)", func() {
 				h.reconcile()
 
 				Expect(h.calls).To(Equal([]string{
-					"delete " + utils.InstanceName(fleet.Name, 0),
-					"delete " + utils.InstanceName(fleet.Name, 2),
+					call(callDeleteInstance, naming.InstanceName(fleet.Name, 0)),
+					call(callDeleteInstance, naming.InstanceName(fleet.Name, 2)),
 				}))
 				instances := h.instances()
 				Expect(instances).To(HaveLen(3), "want all 3 SimInstances held by their teardown")
 				for ordinal, instance := range instances {
 					Expect(instance.DeletionTimestamp.IsZero()).To(BeFalse(), "SimInstance %d was not deleted", ordinal)
 				}
-				Expect(h.fleet().Finalizers).To(ContainElement(simFleetTeardownFinalizer),
+				Expect(h.fleet().Finalizers).To(ContainElement(scalev1alpha1.SimFleetFinalizer),
 					"finalizer was removed while SimInstances remain")
 
 				h.calls = nil
 				h.reconcile()
 				Expect(h.calls).To(BeEmpty(), "want no calls while every instance is already terminating")
-				Expect(h.fleet().Finalizers).To(ContainElement(simFleetTeardownFinalizer),
+				Expect(h.fleet().Finalizers).To(ContainElement(scalev1alpha1.SimFleetFinalizer),
 					"finalizer was removed while terminating SimInstances remain")
 				current := &provisioningv1.DPUNode{}
 				Expect(h.client.Get(context.Background(), client.ObjectKeyFromObject(node), current)).To(Succeed())
@@ -124,8 +126,7 @@ var _ = Describe("SimFleet reconcile (fake client)", func() {
 				Expect(h.fleetGone()).To(BeTrue(), func() string {
 					return fmt.Sprintf("fleet still exists with finalizers %v", h.fleet().Finalizers)
 				})
-				Expect(h.callsWithPrefix("status ", "create ", "new dpunode ", "patch dpunode ", "drop dpunode ")).
-					To(BeEmpty(), "want only the finalizer removal")
+				Expect(h.calls).To(Equal([]string{call(callFinalizers, "[]")}), "want only the finalizer removal")
 			})
 
 			It("a deleting fleet creates nothing, leaves its status alone, and keeps other finalizers", func() {
@@ -140,11 +141,14 @@ var _ = Describe("SimFleet reconcile (fake client)", func() {
 				h.reconcile()
 				h.reconcile()
 
-				Expect(h.callsWithPrefix("status ", "create ", "new dpunode ", "patch dpunode ")).
-					To(BeEmpty(), "want no status patch and no create while deleting")
+				Expect(h.calls).To(Equal([]string{
+					call(callDeleteInstance, naming.InstanceName(fleet.Name, 0)),
+					call(callDeleteInstance, naming.InstanceName(fleet.Name, 1)),
+					call(callFinalizers, "[example.com/hold]"),
+				}), "want only the instance deletes and the finalizer removal while deleting")
 				after := h.fleet()
 				Expect(after.Status).To(Equal(before.Status))
-				Expect(after.Finalizers).NotTo(ContainElement(simFleetTeardownFinalizer),
+				Expect(after.Finalizers).NotTo(ContainElement(scalev1alpha1.SimFleetFinalizer),
 					"want the teardown finalizer removed once no instance remains")
 				Expect(after.Finalizers).To(ContainElement("example.com/hold"), "want the other finalizer kept")
 			})
@@ -164,8 +168,8 @@ var _ = Describe("SimFleet reconcile (fake client)", func() {
 	Describe("errors", func() {
 		It("reports a reconcile error on InventoryReady", func() {
 			fleet := rolloutFleet(2, 2, 2)
-			fleet.Finalizers = []string{simFleetTeardownFinalizer}
-			foreign := desiredHostNode(fleet, 0, fleet.Spec.Replicas)
+			fleet.Finalizers = []string{scalev1alpha1.SimFleetFinalizer}
+			foreign := dpf.DesiredHostNode(fleet, 0, fleet.Spec.Replicas)
 			foreign.OwnerReferences = []metav1.OwnerReference{{
 				APIVersion: scalev1alpha1.GroupVersion.String(),
 				Kind:       "SimFleet",
@@ -188,11 +192,11 @@ var _ = Describe("SimFleet reconcile (fake client)", func() {
 			reconcile()
 
 			expectCondition(h.fleet().Status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionFalse, "ReconcileError")
-			Expect(h.callsWithPrefix("status ")).To(HaveLen(1))
+			Expect(h.calls).To(Equal([]string{call(callStatus, "admitted=2")}), "want only the status patch")
 
 			h.calls = nil
 			reconcile()
-			Expect(h.callsWithPrefix("status ")).To(BeEmpty(), "want no status patch when the condition is unchanged")
+			Expect(h.calls).To(BeEmpty(), "want no writes when the condition is unchanged")
 		})
 	})
 })
@@ -479,7 +483,7 @@ var _ = Describe("SimFleet status", func() {
 			}),
 			Entry("template validation reason", bootstrapReadyCase{
 				fleet:      withTemplate,
-				bootstrap:  bootstrapOutcome{err: errUnsupportedStorage},
+				bootstrap:  bootstrapOutcome{err: kubevirt.ErrUnsupportedStorage},
 				desiredVMs: 1,
 				status:     metav1.ConditionFalse,
 				reason:     "UnsupportedStorage",

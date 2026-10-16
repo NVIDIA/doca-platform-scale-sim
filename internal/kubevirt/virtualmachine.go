@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+// Package kubevirt renders and validates the KubeVirt VirtualMachine that
+// hosts a simulated DPU, and reads the BMC address its guest reports.
+package kubevirt
 
 import (
 	"fmt"
@@ -26,28 +28,42 @@ import (
 	virtv1 "kubevirt.io/api/core/v1"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
+// TemplateError names a VirtualMachine template this controller refuses to
+// render. Reason is the condition reason status reports for it.
+type TemplateError struct {
+	Reason  string
+	Message string
+}
+
+func (e *TemplateError) Error() string {
+	return e.Message
+}
+
+// Fixed TemplateErrors ValidateTemplate returns; match them with errors.Is.
 var (
-	errUnsupportedStorage = &virtualMachineConditionError{
-		reason:  "UnsupportedStorage",
-		message: "persistent VirtualMachine storage is not supported",
+	ErrUnsupportedStorage = &TemplateError{
+		Reason:  "UnsupportedStorage",
+		Message: "persistent VirtualMachine storage is not supported",
 	}
-	errUnsupportedNetwork = &virtualMachineConditionError{
-		reason:  "UnsupportedNetwork",
-		message: "only bridge pod networking is supported",
+	ErrUnsupportedNetwork = &TemplateError{
+		Reason:  "UnsupportedNetwork",
+		Message: "only bridge pod networking is supported",
 	}
 )
 
 func newUnsupportedRunStrategyError(strategy string) error {
-	return &virtualMachineConditionError{
-		reason:  "UnsupportedRunStrategy",
-		message: fmt.Sprintf("run strategy %q is not supported", strategy),
+	return &TemplateError{
+		Reason:  "UnsupportedRunStrategy",
+		Message: fmt.Sprintf("run strategy %q is not supported", strategy),
 	}
 }
 
-func validateVirtualMachineTemplate(tmpl *scalev1alpha1.VirtualMachineTemplate) error {
+// ValidateTemplate refuses a template DesiredVirtualMachine cannot render.
+// A nil template is valid: the fleet then boots no guests.
+func ValidateTemplate(tmpl *scalev1alpha1.VirtualMachineTemplate) error {
 	if tmpl == nil {
 		return nil
 	}
@@ -55,10 +71,10 @@ func validateVirtualMachineTemplate(tmpl *scalev1alpha1.VirtualMachineTemplate) 
 		return fmt.Errorf("image must not be empty")
 	}
 	if tmpl.Storage != nil && tmpl.Storage.Ephemeral != nil && !*tmpl.Storage.Ephemeral {
-		return errUnsupportedStorage
+		return ErrUnsupportedStorage
 	}
 	if tmpl.PodNetwork != nil && tmpl.PodNetwork.Bridge != nil && !*tmpl.PodNetwork.Bridge {
-		return errUnsupportedNetwork
+		return ErrUnsupportedNetwork
 	}
 
 	switch tmpl.RunStrategy {
@@ -94,10 +110,12 @@ func virtualMachineArchitecture(tmpl *scalev1alpha1.VirtualMachineTemplate) stri
 	return defaultVirtualMachineArchitecture
 }
 
-// virtualMachineRequests copies the template requests and fills in CPU and
-// memory when the template leaves either out. KubeVirt v1.9 rejects a VMI with
-// no memory request, so the SimFleet API can keep resources optional only if
-// the controller supplies both. Every other requested resource is preserved.
+// virtualMachineRequests copies the template requests, preserving every
+// resource the template names, and defaults CPU and memory when either is
+// missing. KubeVirt's admission webhook rejects a VMI with no memory request,
+// so SimFleet's optional resources depend on this default. The CPU default
+// keeps guest sizing the same on every cluster instead of leaving it to
+// KubeVirt's cluster-wide CPU allocation settings.
 func virtualMachineRequests(resources *scalev1alpha1.VirtualMachineResources) corev1.ResourceList {
 	requests := corev1.ResourceList{}
 	if resources != nil {
@@ -119,11 +137,13 @@ func virtualMachineLabels(fleet *scalev1alpha1.SimFleet, ordinal int) map[string
 	if fleet.Spec.VirtualMachineTemplate != nil {
 		maps.Copy(labels, fleet.Spec.VirtualMachineTemplate.Metadata.Labels)
 	}
-	maps.Copy(labels, inventoryLabels(fleet, fmt.Sprintf("%06d", ordinal)))
+	maps.Copy(labels, naming.InventoryLabels(fleet, fmt.Sprintf("%06d", ordinal)))
 	return labels
 }
 
-func desiredVirtualMachine(fleet *scalev1alpha1.SimFleet, ordinal int) *virtv1.VirtualMachine {
+// DesiredVirtualMachine renders the guest for ordinal. The fleet's template
+// must be non-nil and have passed ValidateTemplate.
+func DesiredVirtualMachine(fleet *scalev1alpha1.SimFleet, ordinal int) *virtv1.VirtualMachine {
 	tmpl := fleet.Spec.VirtualMachineTemplate.DeepCopy()
 	runStrategy := virtv1.VirtualMachineRunStrategy(tmpl.RunStrategy)
 	if runStrategy == "" {
@@ -141,7 +161,7 @@ func desiredVirtualMachine(fleet *scalev1alpha1.SimFleet, ordinal int) *virtv1.V
 			Kind:       "VirtualMachine",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.VirtualMachineName(fleet.Name, ordinal),
+			Name:      naming.VirtualMachineName(fleet.Name, ordinal),
 			Namespace: fleet.Namespace,
 			Labels:    labels,
 		},
@@ -169,7 +189,7 @@ func desiredVirtualMachine(fleet *scalev1alpha1.SimFleet, ordinal int) *virtv1.V
 								},
 							},
 							Interfaces: []virtv1.Interface{{
-								Name: "default",
+								Name: BridgedNetworkName,
 								InterfaceBindingMethod: virtv1.InterfaceBindingMethod{
 									Bridge: &virtv1.InterfaceBridge{},
 								},
@@ -179,7 +199,7 @@ func desiredVirtualMachine(fleet *scalev1alpha1.SimFleet, ordinal int) *virtv1.V
 					NodeSelector: tmpl.NodeSelector,
 					Tolerations:  tmpl.Tolerations,
 					Networks: []virtv1.Network{{
-						Name: "default",
+						Name: BridgedNetworkName,
 						NetworkSource: virtv1.NetworkSource{
 							Pod: &virtv1.PodNetwork{},
 						},
@@ -199,7 +219,7 @@ func desiredVirtualMachine(fleet *scalev1alpha1.SimFleet, ordinal int) *virtv1.V
 							VolumeSource: virtv1.VolumeSource{
 								CloudInitNoCloud: &virtv1.CloudInitNoCloudSource{
 									UserDataSecretRef: &corev1.LocalObjectReference{
-										Name: utils.CloudInitSecretName(fleet.Name, ordinal),
+										Name: naming.CloudInitSecretName(fleet.Name, ordinal),
 									},
 									NetworkData: defaultCloudInitNetworkData,
 								},
