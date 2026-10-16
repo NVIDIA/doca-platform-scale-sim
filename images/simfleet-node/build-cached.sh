@@ -17,9 +17,10 @@
 set -euo pipefail
 
 # Reuse a previously built containerDisk only when it carries the source hash
-# of the recipe in this checkout. The e2e runners are persistent shell runners,
-# so the fixed simfleet-node tag survives between jobs and its mere existence
-# says nothing about whether it matches the current recipe.
+# of the recipe in this checkout. On a host that keeps its Docker images, the
+# fixed simfleet-node tag survives between runs, and its mere existence says
+# nothing about whether it matches the current recipe. GitHub-hosted runners
+# start empty, so there this always builds.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
