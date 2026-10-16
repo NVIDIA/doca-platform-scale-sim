@@ -25,7 +25,13 @@ KIND_CLUSTER="${KIND_CLUSTER:-simfleet-controller-test-e2e}"
 
 echo "Installing KubeVirt ${KUBEVIRT_VERSION}..."
 "${KUBECTL_BIN}" apply -f "${KUBEVIRT_RELEASE_URL}/kubevirt-operator.yaml"
+# virt-operator, virt-controller and virt-exportproxy run two replicas of
+# 275-450Mi requests each, which a single node gains nothing from and a 2-vCPU,
+# 8 GB runner cannot spare next to the guests. infra.replicas covers every
+# deployment the operator creates; the operator itself is scaled here.
+"${KUBECTL_BIN}" -n kubevirt scale deployment virt-operator --replicas=1
 "${KUBECTL_BIN}" apply -f "${KUBEVIRT_RELEASE_URL}/kubevirt-cr.yaml"
+"${KUBECTL_BIN}" patch kubevirt kubevirt -n kubevirt --type merge -p '{"spec":{"infra":{"replicas":1}}}'
 
 "${KUBECTL_BIN}" wait --for=condition=Available \
 	kubevirt.kubevirt.io/kubevirt \

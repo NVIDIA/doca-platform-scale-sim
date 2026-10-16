@@ -12,14 +12,28 @@ spec:
     # placeholders with the endpoint of the default kubernetes Service.
     kubernetesAPIServerVIP: KUBERNETES_API_SERVER_VIP
     kubernetesAPIServerPort: KUBERNETES_API_SERVER_PORT
+  # The suite has to schedule on a 2-vCPU, 8 GB runner. The controllers
+  # default to two leader-elected replicas, and the provisioning controller
+  # alone requests a full CPU and 1Gi.
   dpuDetector:
     disable: true
   provisioningController:
+    replicas: 1
+    controller:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
     installInterface:
       installViaRedfish:
         skipDPUNodeDiscovery: true
+  dpuServiceController:
+    replicas: 1
+  serviceSetController:
+    replicas: 1
   kamajiClusterManager:
     disable: false
+    replicas: 1
   staticClusterManager:
     disable: true
   monitoring:
