@@ -55,7 +55,7 @@ func readRepoFile(path string) string {
 func loadManagerRole() *rbacv1.ClusterRole {
 	GinkgoHelper()
 	role := &rbacv1.ClusterRole{}
-	Expect(yaml.Unmarshal([]byte(readRepoFile("config/rbac/role.yaml")), role)).To(Succeed(),
+	Expect(yaml.Unmarshal([]byte(readRepoFile("charts/simfleet-controller/templates/role.yaml")), role)).To(Succeed(),
 		"Could not decode manager Role")
 	return role
 }
