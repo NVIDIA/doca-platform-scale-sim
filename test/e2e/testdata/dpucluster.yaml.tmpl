@@ -1,0 +1,19 @@
+apiVersion: provisioning.dpu.nvidia.com/v1alpha1
+kind: DPUCluster
+metadata:
+  name: e2e-tenant
+  namespace: dpf-operator-system
+spec:
+  type: kamaji
+  # DPF copies a NodePort into the TenantControlPlane network profile only for a
+  # keepalived endpoint. Without one the profile keeps its default port of 6443,
+  # which Kamaji then rejects as a nodePort, and the cluster never goes Ready.
+  # The VIP stays local to the Kind node's eth0. Guests join it from the pod
+  # network; the suite rewrites the tenant kubeconfig to the node's InternalIP.
+  clusterEndpoint:
+    keepalived:
+      interface: eth0
+      vip: ${KEEPALIVED_VIP}
+      virtualRouterID: ${KEEPALIVED_VIRTUAL_ROUTER_ID}
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""

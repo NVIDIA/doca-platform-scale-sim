@@ -1,0 +1,123 @@
+name: e2e
+
+# The suite builds a Kind cluster with DPF and KubeVirt and runs for up to two
+# hours, so it is opt-in on pull requests (add the e2e label) and runs on
+# every push to main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    runs-on: ubuntu-latest
+    # Must exceed E2E_TEST_TIMEOUT (119m) plus the cluster, DPF, KubeVirt and
+    # node image setup, or the job is killed before the suite reports.
+    timeout-minutes: 180
+    env:
+      KUBECTL_VERSION: v1.36.4
+    steps:
+      # Kind, DPF, KubeVirt and the containerDisk build do not fit in the
+      # runner's default free space.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+      # KubeVirt and the libguestfs appliance both use /dev/kvm when the
+      # runner user can open it.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # mock-dpuagent brings its own module graph and toolchain. Keying on
+          # mock.ref as well also keeps this cache apart from the unit test
+          # workflow's, which would otherwise claim the same key without them.
+          cache-dependency-path: |
+            go.sum
+            hack/dpuagent/mock.ref
+      - name: Install kubectl
+        run: |
+          sudo curl -fsSLo /usr/local/bin/kubectl \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          sudo chmod +x /usr/local/bin/kubectl
+          kubectl version --client
+      # The node image source hash covers the mock-dpuagent binary, so the
+      # binary has to exist before the cache key does.
+      - name: Compute the node image source hash
+        id: node-image
+        run: |
+          make dpuagent-build
+          hash="$(make -s --no-print-directory -C images/simfleet-node node-image-source-hash)"
+          echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
+      - name: Restore the node image
+        id: node-image-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/simfleet-node.tar
+          key: simfleet-node-${{ steps.node-image.outputs.hash }}
+      - name: Load the node image
+        if: steps.node-image-cache.outputs.cache-hit == 'true'
+        run: |
+          docker load -i "${RUNNER_TEMP}/simfleet-node.tar"
+          rm -f "${RUNNER_TEMP}/simfleet-node.tar"
+      # Only a node image build needs the builder image this checks.
+      - name: Check the node image build host
+        if: steps.node-image-cache.outputs.cache-hit != 'true'
+        run: bash images/simfleet-node/check-host.sh
+      # RUN --mount=type=cache contents are not part of any image or buildx
+      # cache export, so the controller's Go build cache is moved in and out of
+      # the builder by hand.
+      - name: Cache the controller Go build
+        id: controller-go-build
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/controller-go-build
+          key: controller-go-build-${{ hashFiles('go.sum', 'Dockerfile', 'Makefile') }}
+          restore-keys: controller-go-build-
+      - name: Create the controller image builder
+        run: make docker-buildx-setup
+      - name: Inject the controller Go build cache
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          builder: simfleet-controller-builder
+          cache-map: |
+            {"${{ runner.temp }}/controller-go-build": "/root/.cache/go-build"}
+          scratch-dir: ${{ runner.temp }}/buildkit-cache-dance
+          skip-extraction: ${{ steps.controller-go-build.outputs.cache-hit }}
+      - name: Run the e2e suite
+        run: make test-e2e
+      # After a passing run, the suite has deleted its cluster, so there is room
+      # for the image archive.
+      - name: Export the node image
+        if: steps.node-image-cache.outputs.cache-hit != 'true'
+        run: docker save -o "${RUNNER_TEMP}/simfleet-node.tar" simfleet-node:e2e
+      - name: Save the node image
+        if: steps.node-image-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/simfleet-node.tar
+          key: ${{ steps.node-image-cache.outputs.cache-primary-key }}
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get simfleets,siminstances,vm,vmi -A || true
+          kubectl get dpus,dpudevices,dpunodes -A || true

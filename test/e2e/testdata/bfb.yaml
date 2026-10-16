@@ -1,0 +1,11 @@
+apiVersion: provisioning.dpu.nvidia.com/v1alpha1
+kind: BFB
+metadata:
+  name: e2e-bfb
+  namespace: dpf-operator-system
+spec:
+  # The trimmed BF3 bundle from the same doca-platform revision hack/dpuagent/
+  # mock.ref pins, served in-cluster by hack/e2e/bfb-fixtures.yaml. A release
+  # bundle is several gigabytes, and the mock BMC only ever reads the headers
+  # and the software inventory this fixture keeps.
+  url: http://bfb-fixtures.dpf-operator-system.svc.cluster.local/bf3-trimmed.bfb

@@ -83,6 +83,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 # e2e uses a local Kind cluster and DPF prerequisite charts from
 # https://github.com/NVIDIA/doca-platform/tree/public-release-v26.8
 # pinned to e343a51b63ee8cddd29f71891455ff6f83e50d94.
+# `make test-e2e` also builds and deploys the controller, then deletes the cluster.
 KIND_CLUSTER ?= simfleet-controller-test-e2e
 KIND_KUBERNETES_VERSION ?= v1.36.4
 KIND_NODE_IMAGE ?= kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
@@ -150,11 +151,54 @@ deploy-e2e-bfb-fixtures: setup-test-e2e ## Serve the trimmed BFB fixture in the 
 		./hack/e2e/deploy-bfb-fixtures.sh
 
 KUBEVIRT_VERSION ?= v1.9.0
+E2E_IMG ?= example.com/simfleet-controller:e2e
+# Not overridable: the suite asserts this exact local tag on the
+# VirtualMachine it expects the controller to create. The tag is never
+# published; the Kubernetes version lives in an OCI label instead.
+override E2E_NODE_IMG := simfleet-node:e2e
+NODE_IMAGE_DIR ?= $(CURDIR)/images/simfleet-node
+E2E_DPUAGENT_BIN := $(CURDIR)/bin/mock-dpuagent
+# Must exceed the suite's own waits: go test panics the process at its timeout,
+# which kills the failure diagnostics before Ginkgo can report them. Under
+# software emulation those waits are 20m for VirtualMachine Ready plus 20m for
+# the guest agent, 2m per instance for a delegated pod address, 5m for the BFB
+# download, and 27m for Redfish provisioning and the tenant join; then 6m to
+# tear the replaced ordinal down and 27m to bring it back, and 6m to tear the
+# scaled-away ordinal down. That is 115m, which leaves the rest ~4m. The 24h
+# management token lifetime is the hard ceiling (test/consistency).
+E2E_TEST_TIMEOUT ?= 119m
 
 .PHONY: deploy-e2e-kubevirt
 deploy-e2e-kubevirt: setup-test-e2e ## Install KubeVirt on the Kind cluster
 	KUBECTL=$(KUBECTL) KIND_CLUSTER=$(KIND_CLUSTER) KUBEVIRT_VERSION=$(KUBEVIRT_VERSION) \
 		./hack/e2e/deploy-kubevirt.sh
+
+.PHONY: test-e2e
+test-e2e: check-e2e-host kind ## Run the e2e tests on Kind with DPF and KubeVirt.
+	# Recursive makes ensure cleanup finishes before setup, even under make -j.
+	$(MAKE) cleanup-test-e2e
+	$(MAKE) test-e2e-run
+
+.PHONY: test-e2e-run
+test-e2e-run: check-e2e-host setup-test-e2e deploy-e2e-dpf deploy-e2e-kubevirt deploy-e2e-bfb-fixtures manifests generate fmt vet
+	# Cached build: where Docker images persist between runs, an image whose
+	# stamped source hash matches this checkout's recipe is reused, and any
+	# recipe change rebuilds it. The agent binary is guest content, so it is
+	# built first and passed in.
+	$(MAKE) dpuagent-build
+	$(MAKE) -C $(NODE_IMAGE_DIR) node-image-build-cached NODE_IMG=$(E2E_NODE_IMG) \
+		DPUAGENT_BIN=$(E2E_DPUAGENT_BIN)
+	$(KIND) load docker-image $(E2E_NODE_IMG) --name $(KIND_CLUSTER)
+	$(MAKE) docker-build IMG=$(E2E_IMG)
+	$(KIND) load docker-image $(E2E_IMG) --name $(KIND_CLUSTER)
+	# Pod Security admission only checks a pod when it is created, so the
+	# namespace is labelled before the chart creates the controller pod.
+	$(KUBECTL) create namespace simfleet-controller-system --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) label --overwrite ns simfleet-controller-system pod-security.kubernetes.io/enforce=restricted
+	$(MAKE) deploy IMG=$(E2E_IMG)
+	$(KUBECTL) wait --for=condition=Available deployment -l control-plane=controller-manager -n simfleet-controller-system --timeout=180s
+	PATH="$(LOCALBIN):$(PATH)" go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout $(E2E_TEST_TIMEOUT)
+	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
@@ -336,6 +380,24 @@ helm-push: ## Package and push the Helm chart to HELM_REGISTRY.
 .PHONY: helm-push-package
 helm-push-package: helm ## Push an already packaged chart to HELM_REGISTRY (login first).
 	"$(HELM)" push $(DIST_DIR)/simfleet-controller-$(VERSION).tgz $(HELM_REGISTRY)
+
+##@ Deployment
+
+DEPLOY_NAMESPACE ?= simfleet-controller-system
+
+# IMG must be repository:tag. It is split at the last colon, so a digest
+# reference or an untagged image on a registry with a port is split wrongly.
+.PHONY: deploy
+deploy: manifests helm ## Install or upgrade the Helm chart, running IMG, on the cluster in ~/.kube/config. The chart carries the CRDs.
+	img='$(IMG)'; \
+	"$(HELM)" upgrade --install simfleet-controller $(CHART_DIR) \
+		--namespace $(DEPLOY_NAMESPACE) --create-namespace \
+		--set-string controllerManager.image.repository="$${img%:*}" \
+		--set-string controllerManager.image.tag="$${img##*:}"
+
+.PHONY: undeploy
+undeploy: helm ## Uninstall the Helm chart from the cluster in ~/.kube/config.
+	"$(HELM)" uninstall simfleet-controller --namespace $(DEPLOY_NAMESPACE) --ignore-not-found
 
 ##@ Dependencies
 
