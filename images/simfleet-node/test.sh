@@ -470,19 +470,29 @@ case "$1" in
     test -n "${image}" || { echo "docker run: no image" >&2; exit 2; }
     test -n "${work}" || { echo "docker run: no /work mount" >&2; exit 2; }
     test -n "${recipe}" || { echo "docker run: no /recipe mount" >&2; exit 2; }
+    # One left-to-right pass over both mounts. Substituting one mount and then
+    # the other would rewrite the host path just put in, and a checkout under
+    # /home/runner/work, as on GitHub Actions, contains /work.
+    to_host() {
+      local rest="$1" out=""
+      while [ -n "${rest}" ]; do
+        case "${rest}" in
+          /recipe*) out+="${recipe}"; rest="${rest#/recipe}" ;;
+          /work*) out+="${work}"; rest="${rest#/work}" ;;
+          *) out+="${rest:0:1}"; rest="${rest:1}" ;;
+        esac
+      done
+      printf "%s" "${out}"
+    }
     translated=()
     for arg in ${cmd[@]+"${cmd[@]}"}; do
-      arg="${arg//\/recipe/${recipe}}"
-      arg="${arg//\/work/${work}}"
-      translated+=("${arg}")
+      translated+=("$(to_host "${arg}")")
     done
     # Environment carries container paths too, such as the staged mock-dpuagent
     # binary, so it needs the same translation as the command.
     translated_envs=()
     for env_pair in ${envs[@]+"${envs[@]}"}; do
-      env_pair="${env_pair//\/recipe/${recipe}}"
-      env_pair="${env_pair//\/work/${work}}"
-      translated_envs+=("${env_pair}")
+      translated_envs+=("$(to_host "${env_pair}")")
     done
     exec env ${translated_envs[@]+"${translated_envs[@]}"} "${translated[@]}"
     ;;
@@ -613,7 +623,10 @@ test_build_orchestration() {
 	: > "${CALLS}"
 	write_build_host
 
-	run_build > "${TMP}/build.out" 2>&1
+	run_build > "${TMP}/build.out" 2>&1 || {
+		cat "${TMP}/build.out" >&2
+		fail "build.sh failed against the stand-in build host"
+	}
 
 	assert_contains 'docker create --platform linux/amd64 example.invalid/ubuntu@sha256:test' "${CALLS}"
 	assert_contains "docker cp test-container:/disk/disk.img ${WORK}/base.img" "${CALLS}"
