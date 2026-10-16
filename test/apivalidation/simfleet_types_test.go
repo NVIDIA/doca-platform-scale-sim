@@ -17,13 +17,12 @@ limitations under the License.
 package apivalidation_test
 
 import (
-	"bytes"
 	"regexp"
 	"slices"
-	"strings"
-	"testing"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -32,295 +31,236 @@ import (
 
 const dpuAgentImmutableRule = "!has(oldSelf.dpuAgent) ? !has(self.dpuAgent) : self.dpuAgent == oldSelf.dpuAgent"
 
-func TestSimFleetInventoryConditionConstants(t *testing.T) {
-	if scalev1alpha1.ConditionInventoryReady != "InventoryReady" {
-		t.Fatalf("ConditionInventoryReady = %q, want InventoryReady", scalev1alpha1.ConditionInventoryReady)
-	}
-	if scalev1alpha1.ConditionDPUsObserved != "DPUsObserved" {
-		t.Fatalf("ConditionDPUsObserved = %q, want DPUsObserved", scalev1alpha1.ConditionDPUsObserved)
-	}
-	if scalev1alpha1.ConditionBootstrapReady != "BootstrapReady" {
-		t.Fatalf("ConditionBootstrapReady = %q, want BootstrapReady", scalev1alpha1.ConditionBootstrapReady)
-	}
-}
-
-func TestSimFleetInventorySpecDeepCopy(t *testing.T) {
-	pfs := 2
-	spec := scalev1alpha1.SimFleetSpec{
-		Replicas:              20,
-		DevicesPerDPUNode:     10,
-		DeviceSelectionLabels: map[string]string{"simfleet": "scale-3000"},
-		DPUNodeTemplate: &scalev1alpha1.DPUNodeTemplate{
-			Metadata: scalev1alpha1.TemplateMetadata{Labels: map[string]string{"role": "dpu-node"}},
-			Spec: scalev1alpha1.DPUNodeTemplateSpec{
-				NodeRebootMethod: &provisioningv1.NodeRebootMethod{
-					External: &provisioningv1.External{},
-				},
-			},
-		},
-		DPUDeviceTemplate: &scalev1alpha1.DPUDeviceTemplate{
-			Spec: scalev1alpha1.DPUDeviceTemplateSpec{NumberOfPFs: &pfs},
-		},
-	}
-
-	copied := spec.DeepCopy()
-	if copied.Replicas != spec.Replicas ||
-		copied.DevicesPerDPUNode != spec.DevicesPerDPUNode ||
-		copied.DeviceSelectionLabels["simfleet"] != "scale-3000" ||
-		copied.DPUNodeTemplate == nil ||
-		copied.DPUDeviceTemplate == nil ||
-		copied.DPUDeviceTemplate.Spec.NumberOfPFs == nil ||
-		*copied.DPUDeviceTemplate.Spec.NumberOfPFs != pfs {
-		t.Fatal("DeepCopy did not preserve inventory spec fields")
-	}
-
-	copied.DeviceSelectionLabels["simfleet"] = "mutated"
-	if spec.DeviceSelectionLabels["simfleet"] != "scale-3000" {
-		t.Fatal("DeepCopy should deep-copy DeviceSelectionLabels")
-	}
-}
-
-func TestSimFleetInventoryStatusDeepCopy(t *testing.T) {
-	status := scalev1alpha1.SimFleetStatus{
-		ObservedGeneration:   3,
-		AdmittedReplicas:     20,
-		CreatedInstances:     19,
-		VMReadyInstances:     18,
-		ProvisionedInstances: 17,
-		FailedInstances:      1,
-		DPUNodes:             2,
-		Conditions: []metav1.Condition{
-			{Type: scalev1alpha1.ConditionInventoryReady, Status: metav1.ConditionTrue},
-			{Type: scalev1alpha1.ConditionDPUsObserved, Status: metav1.ConditionFalse},
-		},
-	}
-
-	copied := status.DeepCopy()
-	if copied.ObservedGeneration != 3 ||
-		copied.AdmittedReplicas != 20 ||
-		copied.CreatedInstances != 19 ||
-		copied.VMReadyInstances != 18 ||
-		copied.ProvisionedInstances != 17 ||
-		copied.FailedInstances != 1 ||
-		copied.DPUNodes != 2 ||
-		len(copied.Conditions) != 2 {
-		t.Fatal("DeepCopy did not preserve inventory status fields")
-	}
-
-	copied.Conditions[0].Status = metav1.ConditionUnknown
-	if status.Conditions[0].Status != metav1.ConditionTrue {
-		t.Fatal("DeepCopy should deep-copy Conditions")
-	}
-}
-
-// The rollout index survives a restart only if the generated CRD carries it.
-// A Go field the schema prunes would look correct in memory and be lost on
-// every write.
-func TestSimFleetStatusSchemaCarriesTheRolloutCounts(t *testing.T) {
-	status := simFleetStatusSchema(t)
-	got := make([]string, 0, len(status.Properties))
-	for name, property := range status.Properties {
-		if name != "conditions" && property.Type != "integer" {
-			t.Errorf("status.%s type = %q, want integer", name, property.Type)
-		}
-		got = append(got, name)
-	}
-	slices.Sort(got)
-	want := []string{
-		"admittedReplicas", "conditions", "createdInstances", "dpuNodes", "failedInstances",
-		"observedGeneration", "provisionedInstances", "vmReadyInstances",
-	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("status properties = %v, want %v", got, want)
-	}
-}
-
-func TestSimFleetPrintColumns(t *testing.T) {
-	crd := loadSimFleetCRD(t)
-	if len(crd.Spec.Versions) == 0 {
-		t.Fatal("SimFleet CRD has no versions")
-	}
-	want := []apiextensionsv1.CustomResourceColumnDefinition{
-		{Name: "Replicas", Type: "integer", JSONPath: ".spec.replicas"},
-		{Name: "Admitted", Type: "integer", JSONPath: ".status.admittedReplicas"},
-		{Name: "Provisioned", Type: "integer", JSONPath: ".status.provisionedInstances"},
-		{Name: "Failed", Type: "integer", JSONPath: ".status.failedInstances"},
-		{Name: "Ready", Type: "string", JSONPath: ".status.conditions[?(@.type=='InventoryReady')].status"},
-		{Name: "Age", Type: "date", JSONPath: ".metadata.creationTimestamp"},
-	}
-	if got := crd.Spec.Versions[0].AdditionalPrinterColumns; !slices.Equal(got, want) {
-		t.Fatalf("printer columns = %+v, want %+v", got, want)
-	}
-}
-
-// The controller filters reserved keys out of a selector, but filtering is
-// silent: a fleet author who uses one gets a device that never matches their
-// DPUSet and nothing to explain it. Rejecting the selector at admission is
-// where the author actually finds out.
-func TestSimFleetDeviceSelectionLabelsRejectReservedKeys(t *testing.T) {
-	spec := simFleetSpecSchema(t)
-	selector, ok := spec.Properties["deviceSelectionLabels"]
-	if !ok {
-		t.Fatal("spec schema is missing deviceSelectionLabels")
-	}
-	if len(selector.XValidations) == 0 {
-		t.Fatal("deviceSelectionLabels has no CEL validation for reserved keys")
-	}
-
-	rule := selector.XValidations[0]
-	for _, reserved := range scalev1alpha1.ReservedDeviceLabelKeys {
-		if !strings.Contains(rule.Rule, "'"+reserved+"'") {
-			t.Errorf("deviceSelectionLabels rule does not reject reserved key %q: %s",
-				reserved, rule.Rule)
-		}
-		if !strings.Contains(rule.Message, reserved) {
-			t.Errorf("deviceSelectionLabels message does not name reserved key %q: %s",
-				reserved, rule.Message)
-		}
-	}
-	// A rule that only listed keys would still pass the checks above if it
-	// never actually looked at the selector's keys.
-	if !strings.Contains(rule.Rule, "self.exists(") {
-		t.Fatalf("deviceSelectionLabels rule does not test the selector's own keys: %s", rule.Rule)
-	}
-}
-
-// Nothing consumes the reserved list unless it is complete, so pin it here
-// too: this is the list the CEL rule above and the controller filter share.
-func TestReservedDeviceLabelKeysAreTheIdentityLabels(t *testing.T) {
-	want := []string{
-		"scale.dpu.nvidia.com/fleet-name",
-		"scale.dpu.nvidia.com/fleet-uid",
-		"scale.dpu.nvidia.com/ordinal",
-		"provisioning.dpu.nvidia.com/dpunode-name",
-	}
-	if !slices.Equal(scalev1alpha1.ReservedDeviceLabelKeys, want) {
-		t.Fatalf("ReservedDeviceLabelKeys = %v, want %v",
-			scalev1alpha1.ReservedDeviceLabelKeys, want)
-	}
-}
-
-func TestSimFleetBootstrapSpecDeepCopy(t *testing.T) {
-	spec := scalev1alpha1.SimFleetSpec{
-		Replicas:              1,
-		DevicesPerDPUNode:     1,
-		DeviceSelectionLabels: map[string]string{"simfleet": "scale-3000"},
-		Bootstrap: &scalev1alpha1.BootstrapSpec{
-			DPUClusterRef: scalev1alpha1.DPUClusterReference{
-				Name:      "tenant1",
-				Namespace: "dpf-operator-system",
-			},
-		},
-	}
-
-	copied := spec.DeepCopy()
-	if copied.Bootstrap == nil ||
-		copied.Bootstrap.DPUClusterRef.Name != "tenant1" ||
-		copied.Bootstrap.DPUClusterRef.Namespace != "dpf-operator-system" {
-		t.Fatal("DeepCopy did not preserve bootstrap spec fields")
-	}
-
-	copied.Bootstrap.DPUClusterRef.Name = "mutated"
-	if spec.Bootstrap.DPUClusterRef.Name != "tenant1" {
-		t.Fatal("DeepCopy should deep-copy Bootstrap")
-	}
-}
-
-func TestSimFleetDPUAgentSchemaDefaultsAndImmutability(t *testing.T) {
-	spec := simFleetSpecSchema(t)
-
-	if !hasValidationRule(spec.XValidations, dpuAgentImmutableRule, "spec.dpuAgent is immutable") {
-		t.Fatal("spec schema missing dpuAgent immutability validation")
-	}
-
-	dpuAgent, ok := spec.Properties["dpuAgent"]
-	if !ok {
-		t.Fatal("spec schema missing dpuAgent property")
-	}
-	if dpuAgent.Properties == nil {
-		t.Fatal("dpuAgent schema missing properties")
-	}
-	props := dpuAgent.Properties
-
-	assertDefaultJSON(t, props, "enabled", `true`)
-	assertDefaultJSON(t, props, "dpuType", `"bf3"`)
-	assertDefaultJSON(t, props, "rebootMethod", `"NoAction"`)
-
-	const rebootMethodPattern = `^(NoAction|PowerCycle|SLR)(,(NoAction|PowerCycle|SLR))*$`
-	if got := props["rebootMethod"].Pattern; got != rebootMethodPattern {
-		t.Fatalf("dpuAgent.rebootMethod pattern = %q, want %q", got, rebootMethodPattern)
-	}
-	re := regexp.MustCompile(props["rebootMethod"].Pattern)
-	for _, value := range []string{"NoAction", "PowerCycle", "SLR", "NoAction,PowerCycle,SLR"} {
-		if !re.MatchString(value) {
-			t.Errorf("rebootMethod pattern rejects valid value %q", value)
-		}
-	}
-	for _, value := range []string{"", "External", "NoAction,", "NoAction,SLRPowerCycle", " NoAction"} {
-		if re.MatchString(value) {
-			t.Errorf("rebootMethod pattern accepts invalid value %q", value)
-		}
-	}
-
-	for _, removed := range []string{
-		"controlPlaneMTU", "nicDeviceCount", "extraArgs", "skipSysctl",
-		"skipNetworkConfig", "skipDNSConfig", "skipContainerdConfig",
-		"skipSFConfig", "skipVFMac", "skipOVSRawScript", "skipKernelCmdLine",
-		"skipRemoveBuiltinKubelet", "skipConfigureKubelet", "skipStartKubelet",
-		"skipRebootMethodDiscovery", "skipNodeLabeling", "skipAstra",
-		"skipDPUMode", "skipNVConfig", "skipReboot",
-	} {
-		if _, ok := props[removed]; ok {
-			t.Errorf("dpuAgent schema still contains removed property %q", removed)
-		}
-	}
-}
-
-func assertDefaultJSON(t *testing.T, props map[string]apiextensionsv1.JSONSchemaProps, field, want string) {
-	t.Helper()
+func assertDefaultJSON(props map[string]apiextensionsv1.JSONSchemaProps, field, want string) {
+	GinkgoHelper()
 	raw, ok := propertyDefaultRaw(props, field)
-	if !ok {
-		t.Fatalf("dpuAgent.%s missing default", field)
-	}
-	if !bytes.Equal(raw, []byte(want)) {
-		t.Fatalf("dpuAgent.%s default = %s, want %s", field, string(raw), want)
-	}
+	Expect(ok).To(BeTrue(), "dpuAgent.%s missing default", field)
+	Expect(string(raw)).To(Equal(want), "dpuAgent.%s default", field)
 }
 
-func TestSimFleetDPUAgentSpecDeepCopy(t *testing.T) {
-	enabled := true
-	dpuType := "bf4"
-	rebootMethod := "NoAction"
-	spec := scalev1alpha1.SimFleetSpec{
-		Replicas:              1,
-		DevicesPerDPUNode:     1,
-		DeviceSelectionLabels: map[string]string{"simfleet": "scale-3000"},
-		DPUAgent: &scalev1alpha1.DPUAgentSpec{
-			Enabled:      &enabled,
-			DPUType:      &dpuType,
-			RebootMethod: &rebootMethod,
-		},
-	}
+var _ = Describe("SimFleet API types", func() {
+	It("names the inventory conditions", func() {
+		Expect(scalev1alpha1.ConditionInventoryReady).To(Equal("InventoryReady"))
+		Expect(scalev1alpha1.ConditionDPUsObserved).To(Equal("DPUsObserved"))
+		Expect(scalev1alpha1.ConditionBootstrapReady).To(Equal("BootstrapReady"))
+	})
 
-	copied := spec.DeepCopy()
-	if copied.DPUAgent == nil ||
-		copied.DPUAgent.Enabled == nil ||
-		copied.DPUAgent.DPUType == nil ||
-		copied.DPUAgent.RebootMethod == nil {
-		t.Fatal("DeepCopy did not preserve dpuAgent spec fields")
-	}
+	Describe("DeepCopy", func() {
+		It("preserves and deep-copies the inventory spec", func() {
+			pfs := 2
+			spec := scalev1alpha1.SimFleetSpec{
+				Replicas:              20,
+				DevicesPerDPUNode:     10,
+				DeviceSelectionLabels: map[string]string{"simfleet": "scale-3000"},
+				DPUNodeTemplate: &scalev1alpha1.DPUNodeTemplate{
+					Metadata: scalev1alpha1.TemplateMetadata{Labels: map[string]string{"role": "dpu-node"}},
+					Spec: scalev1alpha1.DPUNodeTemplateSpec{
+						NodeRebootMethod: &provisioningv1.NodeRebootMethod{
+							External: &provisioningv1.External{},
+						},
+					},
+				},
+				DPUDeviceTemplate: &scalev1alpha1.DPUDeviceTemplate{
+					Spec: scalev1alpha1.DPUDeviceTemplateSpec{NumberOfPFs: &pfs},
+				},
+			}
 
-	*copied.DPUAgent.Enabled = false
-	*copied.DPUAgent.DPUType = "bf3"
-	*copied.DPUAgent.RebootMethod = "External"
+			copied := spec.DeepCopy()
+			Expect(copied.Replicas).To(Equal(spec.Replicas))
+			Expect(copied.DevicesPerDPUNode).To(Equal(spec.DevicesPerDPUNode))
+			Expect(copied.DeviceSelectionLabels).To(HaveKeyWithValue("simfleet", "scale-3000"))
+			Expect(copied.DPUNodeTemplate).NotTo(BeNil())
+			Expect(copied.DPUDeviceTemplate).NotTo(BeNil())
+			Expect(copied.DPUDeviceTemplate.Spec.NumberOfPFs).To(HaveValue(Equal(pfs)))
 
-	if *spec.DPUAgent.Enabled != true {
-		t.Fatal("DeepCopy should deep-copy Enabled pointer")
-	}
-	if *spec.DPUAgent.DPUType != "bf4" {
-		t.Fatal("DeepCopy should deep-copy DPUType pointer")
-	}
-	if *spec.DPUAgent.RebootMethod != "NoAction" {
-		t.Fatal("DeepCopy should deep-copy RebootMethod pointer")
-	}
-}
+			copied.DeviceSelectionLabels["simfleet"] = "mutated"
+			Expect(spec.DeviceSelectionLabels).To(HaveKeyWithValue("simfleet", "scale-3000"),
+				"DeepCopy should deep-copy DeviceSelectionLabels")
+		})
+
+		It("preserves and deep-copies the inventory status", func() {
+			status := scalev1alpha1.SimFleetStatus{
+				ObservedGeneration:   3,
+				AdmittedReplicas:     20,
+				CreatedInstances:     19,
+				VMReadyInstances:     18,
+				ProvisionedInstances: 17,
+				FailedInstances:      1,
+				DPUNodes:             2,
+				Conditions: []metav1.Condition{
+					{Type: scalev1alpha1.ConditionInventoryReady, Status: metav1.ConditionTrue},
+					{Type: scalev1alpha1.ConditionDPUsObserved, Status: metav1.ConditionFalse},
+				},
+			}
+
+			copied := status.DeepCopy()
+			Expect(copied.ObservedGeneration).To(BeEquivalentTo(3))
+			Expect(copied.AdmittedReplicas).To(BeEquivalentTo(20))
+			Expect(copied.CreatedInstances).To(BeEquivalentTo(19))
+			Expect(copied.VMReadyInstances).To(BeEquivalentTo(18))
+			Expect(copied.ProvisionedInstances).To(BeEquivalentTo(17))
+			Expect(copied.FailedInstances).To(BeEquivalentTo(1))
+			Expect(copied.DPUNodes).To(BeEquivalentTo(2))
+			Expect(copied.Conditions).To(HaveLen(2))
+
+			copied.Conditions[0].Status = metav1.ConditionUnknown
+			Expect(status.Conditions[0].Status).To(Equal(metav1.ConditionTrue),
+				"DeepCopy should deep-copy Conditions")
+		})
+
+		It("preserves and deep-copies the bootstrap spec", func() {
+			spec := scalev1alpha1.SimFleetSpec{
+				Replicas:              1,
+				DevicesPerDPUNode:     1,
+				DeviceSelectionLabels: map[string]string{"simfleet": "scale-3000"},
+				Bootstrap: &scalev1alpha1.BootstrapSpec{
+					DPUClusterRef: scalev1alpha1.DPUClusterReference{
+						Name:      "tenant1",
+						Namespace: "dpf-operator-system",
+					},
+				},
+			}
+
+			copied := spec.DeepCopy()
+			Expect(copied.Bootstrap).NotTo(BeNil())
+			Expect(copied.Bootstrap.DPUClusterRef.Name).To(Equal("tenant1"))
+			Expect(copied.Bootstrap.DPUClusterRef.Namespace).To(Equal("dpf-operator-system"))
+
+			copied.Bootstrap.DPUClusterRef.Name = "mutated"
+			Expect(spec.Bootstrap.DPUClusterRef.Name).To(Equal("tenant1"), "DeepCopy should deep-copy Bootstrap")
+		})
+
+		It("preserves and deep-copies the dpuAgent spec pointers", func() {
+			enabled := true
+			dpuType := "bf4"
+			rebootMethod := "NoAction"
+			spec := scalev1alpha1.SimFleetSpec{
+				Replicas:              1,
+				DevicesPerDPUNode:     1,
+				DeviceSelectionLabels: map[string]string{"simfleet": "scale-3000"},
+				DPUAgent: &scalev1alpha1.DPUAgentSpec{
+					Enabled:      &enabled,
+					DPUType:      &dpuType,
+					RebootMethod: &rebootMethod,
+				},
+			}
+
+			copied := spec.DeepCopy()
+			Expect(copied.DPUAgent).NotTo(BeNil())
+			Expect(copied.DPUAgent.Enabled).NotTo(BeNil())
+			Expect(copied.DPUAgent.DPUType).NotTo(BeNil())
+			Expect(copied.DPUAgent.RebootMethod).NotTo(BeNil())
+
+			*copied.DPUAgent.Enabled = false
+			*copied.DPUAgent.DPUType = "bf3"
+			*copied.DPUAgent.RebootMethod = "External"
+
+			Expect(*spec.DPUAgent.Enabled).To(BeTrue(), "DeepCopy should deep-copy Enabled pointer")
+			Expect(*spec.DPUAgent.DPUType).To(Equal("bf4"), "DeepCopy should deep-copy DPUType pointer")
+			Expect(*spec.DPUAgent.RebootMethod).To(Equal("NoAction"), "DeepCopy should deep-copy RebootMethod pointer")
+		})
+	})
+
+	// The rollout index survives a restart only if the generated CRD carries it.
+	// A Go field the schema prunes would look correct in memory and be lost on
+	// every write.
+	It("carries the rollout counts in the status schema", func() {
+		status := simFleetStatusSchema()
+		got := make([]string, 0, len(status.Properties))
+		for name, property := range status.Properties {
+			if name != "conditions" {
+				Expect(property.Type).To(Equal("integer"), "status.%s type", name)
+			}
+			got = append(got, name)
+		}
+		slices.Sort(got)
+		Expect(got).To(Equal([]string{
+			"admittedReplicas", "conditions", "createdInstances", "dpuNodes", "failedInstances",
+			"observedGeneration", "provisionedInstances", "vmReadyInstances",
+		}))
+	})
+
+	It("prints the replica, rollout and readiness columns", func() {
+		crd := loadSimFleetCRD()
+		Expect(crd.Spec.Versions).NotTo(BeEmpty(), "SimFleet CRD has no versions")
+		Expect(crd.Spec.Versions[0].AdditionalPrinterColumns).To(Equal([]apiextensionsv1.CustomResourceColumnDefinition{
+			{Name: "Replicas", Type: "integer", JSONPath: ".spec.replicas"},
+			{Name: "Admitted", Type: "integer", JSONPath: ".status.admittedReplicas"},
+			{Name: "Provisioned", Type: "integer", JSONPath: ".status.provisionedInstances"},
+			{Name: "Failed", Type: "integer", JSONPath: ".status.failedInstances"},
+			{Name: "Ready", Type: "string", JSONPath: ".status.conditions[?(@.type=='InventoryReady')].status"},
+			{Name: "Age", Type: "date", JSONPath: ".metadata.creationTimestamp"},
+		}))
+	})
+
+	// The controller filters reserved keys out of a selector, but filtering is
+	// silent: a fleet author who uses one gets a device that never matches their
+	// DPUSet and nothing to explain it. Rejecting the selector at admission is
+	// where the author actually finds out.
+	It("rejects reserved keys in deviceSelectionLabels", func() {
+		spec := simFleetSpecSchema()
+		Expect(spec.Properties).To(HaveKey("deviceSelectionLabels"), "spec schema is missing deviceSelectionLabels")
+		selector := spec.Properties["deviceSelectionLabels"]
+		Expect(selector.XValidations).NotTo(BeEmpty(), "deviceSelectionLabels has no CEL validation for reserved keys")
+
+		rule := selector.XValidations[0]
+		for _, reserved := range scalev1alpha1.ReservedDeviceLabelKeys {
+			Expect(rule.Rule).To(ContainSubstring("'"+reserved+"'"),
+				"deviceSelectionLabels rule does not reject reserved key %q", reserved)
+			Expect(rule.Message).To(ContainSubstring(reserved),
+				"deviceSelectionLabels message does not name reserved key %q", reserved)
+		}
+		// A rule that only listed keys would still pass the checks above if it
+		// never actually looked at the selector's keys.
+		Expect(rule.Rule).To(ContainSubstring("self.exists("),
+			"deviceSelectionLabels rule does not test the selector's own keys")
+	})
+
+	// Nothing consumes the reserved list unless it is complete, so pin it here
+	// too: this is the list the CEL rule above and the controller filter share.
+	It("reserves exactly the identity labels", func() {
+		Expect(scalev1alpha1.ReservedDeviceLabelKeys).To(Equal([]string{
+			"scale.dpu.nvidia.com/fleet-name",
+			"scale.dpu.nvidia.com/fleet-uid",
+			"scale.dpu.nvidia.com/ordinal",
+			"provisioning.dpu.nvidia.com/dpunode-name",
+		}))
+	})
+
+	It("defaults the dpuAgent schema and makes it immutable", func() {
+		spec := simFleetSpecSchema()
+
+		Expect(hasValidationRule(spec.XValidations, dpuAgentImmutableRule, "spec.dpuAgent is immutable")).To(BeTrue(),
+			"spec schema missing dpuAgent immutability validation")
+
+		Expect(spec.Properties).To(HaveKey("dpuAgent"), "spec schema missing dpuAgent property")
+		dpuAgent := spec.Properties["dpuAgent"]
+		Expect(dpuAgent.Properties).NotTo(BeNil(), "dpuAgent schema missing properties")
+		props := dpuAgent.Properties
+
+		assertDefaultJSON(props, "enabled", `true`)
+		assertDefaultJSON(props, "dpuType", `"bf3"`)
+		assertDefaultJSON(props, "rebootMethod", `"NoAction"`)
+
+		const rebootMethodPattern = `^(NoAction|PowerCycle|SLR)(,(NoAction|PowerCycle|SLR))*$`
+		Expect(props["rebootMethod"].Pattern).To(Equal(rebootMethodPattern), "dpuAgent.rebootMethod pattern")
+		re := regexp.MustCompile(props["rebootMethod"].Pattern)
+		for _, value := range []string{"NoAction", "PowerCycle", "SLR", "NoAction,PowerCycle,SLR"} {
+			Expect(re.MatchString(value)).To(BeTrue(), "rebootMethod pattern rejects valid value %q", value)
+		}
+		for _, value := range []string{"", "External", "NoAction,", "NoAction,SLRPowerCycle", " NoAction"} {
+			Expect(re.MatchString(value)).To(BeFalse(), "rebootMethod pattern accepts invalid value %q", value)
+		}
+
+		for _, removed := range []string{
+			"controlPlaneMTU", "nicDeviceCount", "extraArgs", "skipSysctl",
+			"skipNetworkConfig", "skipDNSConfig", "skipContainerdConfig",
+			"skipSFConfig", "skipVFMac", "skipOVSRawScript", "skipKernelCmdLine",
+			"skipRemoveBuiltinKubelet", "skipConfigureKubelet", "skipStartKubelet",
+			"skipRebootMethodDiscovery", "skipNodeLabeling", "skipAstra",
+			"skipDPUMode", "skipNVConfig", "skipReboot",
+		} {
+			Expect(props).NotTo(HaveKey(removed), "dpuAgent schema still contains removed property %q", removed)
+		}
+	})
+})

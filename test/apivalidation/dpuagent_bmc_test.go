@@ -22,140 +22,71 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
 )
 
-func dpuAgentBMCSchema(t *testing.T) apiextensionsv1.JSONSchemaProps {
-	t.Helper()
-	dpuAgent, ok := simFleetSpecSchema(t).Properties["dpuAgent"]
-	if !ok {
-		t.Fatal("spec schema missing dpuAgent")
-	}
-	bmc, ok := dpuAgent.Properties["bmc"]
-	if !ok {
-		t.Fatal("dpuAgent schema missing bmc")
-	}
-	return bmc
+func dpuAgentBMCSchema() apiextensionsv1.JSONSchemaProps {
+	GinkgoHelper()
+	spec := simFleetSpecSchema()
+	Expect(spec.Properties).To(HaveKey("dpuAgent"), "spec schema missing dpuAgent")
+	dpuAgent := spec.Properties["dpuAgent"]
+	Expect(dpuAgent.Properties).To(HaveKey("bmc"), "dpuAgent schema missing bmc")
+	return dpuAgent.Properties["bmc"]
 }
 
-func delayOverrideItemSchema(t *testing.T) apiextensionsv1.JSONSchemaProps {
-	t.Helper()
-	overrides, ok := dpuAgentBMCSchema(t).Properties["responseDelayOverrides"]
-	if !ok {
-		t.Fatal("bmc schema missing responseDelayOverrides")
-	}
-	if overrides.Items == nil || overrides.Items.Schema == nil {
-		t.Fatal("responseDelayOverrides has no item schema")
-	}
+func delayOverrideItemSchema() apiextensionsv1.JSONSchemaProps {
+	GinkgoHelper()
+	bmc := dpuAgentBMCSchema()
+	Expect(bmc.Properties).To(HaveKey("responseDelayOverrides"), "bmc schema missing responseDelayOverrides")
+	overrides := bmc.Properties["responseDelayOverrides"]
+	Expect(overrides.Items).NotTo(BeNil(), "responseDelayOverrides has no item schema")
+	Expect(overrides.Items.Schema).NotTo(BeNil(), "responseDelayOverrides has no item schema")
 	return *overrides.Items.Schema
 }
 
-func enumStrings(t *testing.T, enum []apiextensionsv1.JSON) []string {
-	t.Helper()
+func enumStrings(enum []apiextensionsv1.JSON) []string {
+	GinkgoHelper()
 	values := make([]string, 0, len(enum))
 	for _, raw := range enum {
 		var s string
-		if err := json.Unmarshal(raw.Raw, &s); err != nil {
-			t.Fatalf("enum value %s is not a string: %v", raw.Raw, err)
-		}
+		Expect(json.Unmarshal(raw.Raw, &s)).To(Succeed(), "enum value %s is not a string", raw.Raw)
 		values = append(values, s)
 	}
 	slices.Sort(values)
 	return values
 }
 
-func assertStringBounds(t *testing.T, field string, p apiextensionsv1.JSONSchemaProps, minLen, maxLen int64) {
-	t.Helper()
-	if p.MinLength == nil || *p.MinLength != minLen || p.MaxLength == nil || *p.MaxLength != maxLen {
-		t.Errorf("%s length bounds = %v..%v, want %d..%d", field, p.MinLength, p.MaxLength, minLen, maxLen)
-	}
+func assertStringBounds(field string, p apiextensionsv1.JSONSchemaProps, minLen, maxLen int64) {
+	GinkgoHelper()
+	Expect(p.MinLength).To(HaveValue(Equal(minLen)), "%s min length", field)
+	Expect(p.MaxLength).To(HaveValue(Equal(maxLen)), "%s max length", field)
 }
 
-func assertDelayBounds(t *testing.T, field string, p apiextensionsv1.JSONSchemaProps) {
-	t.Helper()
+func assertDelayBounds(field string, p apiextensionsv1.JSONSchemaProps) {
+	GinkgoHelper()
 	for _, name := range []string{"minSeconds", "maxSeconds"} {
 		s := p.Properties[name]
-		if s.Minimum == nil || *s.Minimum != 0 || s.Maximum == nil || *s.Maximum != 600 {
-			t.Errorf("%s.%s bounds = %v..%v, want 0..600", field, name, s.Minimum, s.Maximum)
-		}
-		if !slices.Contains(p.Required, name) {
-			t.Errorf("%s.%s is not required", field, name)
-		}
+		Expect(s.Minimum).To(HaveValue(BeZero()), "%s.%s minimum", field, name)
+		Expect(s.Maximum).To(HaveValue(BeEquivalentTo(600)), "%s.%s maximum", field, name)
+		Expect(p.Required).To(ContainElement(name), "%s.%s is not required", field, name)
 	}
 }
 
-func assertNoDefaults(t *testing.T, path string, p apiextensionsv1.JSONSchemaProps) {
-	t.Helper()
-	if p.Default != nil {
-		t.Errorf("%s has default %s; spec.dpuAgent.bmc fields must not default", path, p.Default.Raw)
-	}
+func assertNoDefaults(path string, p apiextensionsv1.JSONSchemaProps) {
+	GinkgoHelper()
+	Expect(p.Default).To(BeNil(), func() string {
+		return fmt.Sprintf("%s has default %s; spec.dpuAgent.bmc fields must not default", path, p.Default.Raw)
+	})
 	for name, child := range p.Properties {
-		assertNoDefaults(t, path+"."+name, child)
+		assertNoDefaults(path+"."+name, child)
 	}
 	if p.Items != nil && p.Items.Schema != nil {
-		assertNoDefaults(t, path+"[]", *p.Items.Schema)
-	}
-}
-
-func TestDPUAgentBMCSchemaHasNoDefaults(t *testing.T) {
-	assertNoDefaults(t, "spec.dpuAgent.bmc", dpuAgentBMCSchema(t))
-}
-
-func TestDPUAgentBMCSchemaBounds(t *testing.T) {
-	bmc := dpuAgentBMCSchema(t)
-
-	assertStringBounds(t, "psid", bmc.Properties["psid"], 1, 32)
-	firmware := bmc.Properties["firmware"]
-	for _, name := range []string{"bmc", "erot", "uefi", "nic"} {
-		assertStringBounds(t, "firmware."+name, firmware.Properties[name], 1, 64)
-	}
-
-	assertDelayBounds(t, "responseDelay", bmc.Properties["responseDelay"])
-
-	overrides := bmc.Properties["responseDelayOverrides"]
-	if overrides.MaxItems == nil || *overrides.MaxItems != 32 {
-		t.Errorf("responseDelayOverrides maxItems = %v, want 32", overrides.MaxItems)
-	}
-	item := delayOverrideItemSchema(t)
-	assertDelayBounds(t, "responseDelayOverrides[]", item)
-	if !slices.Contains(item.Required, "name") {
-		t.Error("responseDelayOverrides[].name is not required")
-	}
-
-	methods := item.Properties["methods"]
-	if methods.MinItems == nil || *methods.MinItems != 1 || methods.MaxItems == nil || *methods.MaxItems != 4 {
-		t.Errorf("methods item bounds = %v..%v, want 1..4", methods.MinItems, methods.MaxItems)
-	}
-	if methods.XListType == nil || *methods.XListType != "set" {
-		t.Errorf("methods list type = %v, want set", methods.XListType)
-	}
-	if methods.Items == nil || methods.Items.Schema == nil {
-		t.Fatal("methods has no item schema")
-	}
-	if got, want := enumStrings(t, methods.Items.Schema.Enum), []string{"*", "DELETE", "GET", "PATCH", "POST"}; !slices.Equal(got, want) {
-		t.Errorf("methods enum = %v, want %v", got, want)
-	}
-
-	if overrides.XListType == nil || *overrides.XListType != "atomic" {
-		t.Errorf("responseDelayOverrides list type = %v, want atomic", overrides.XListType)
-	}
-	if len(bmc.Required) != 0 {
-		t.Errorf("bmc.Required = %v, want empty (all fields optional)", bmc.Required)
-	}
-}
-
-func TestDPUAgentOverrideNameEnumMatchesRouteTable(t *testing.T) {
-	if got := len(scalev1alpha1.MockRedfishOperations); got != 35 {
-		t.Fatalf("MockRedfishOperations has %d operations, want the 35 of the pinned mock", got)
-	}
-	got := enumStrings(t, delayOverrideItemSchema(t).Properties["name"].Enum)
-	want := slices.Sorted(maps.Keys(scalev1alpha1.MockRedfishOperations))
-	if !slices.Equal(got, want) {
-		t.Fatalf("responseDelayOverrides[].name enum\ngot:  %v\nwant: %v", got, want)
+		assertNoDefaults(path+"[]", *p.Items.Schema)
 	}
 }
 
@@ -173,11 +104,54 @@ func mockRedfishOperationsCEL() string {
 	return "{" + strings.Join(entries, ", ") + "}"
 }
 
-func TestDPUAgentOverrideMethodsRuleMatchesRouteTable(t *testing.T) {
-	rule := "!has(self.methods) || self.methods.all(m, m == '*' || m in " +
-		mockRedfishOperationsCEL() + "[self.name])"
-	if !hasValidationRule(delayOverrideItemSchema(t).XValidations, rule,
-		"methods must be served by the named Redfish operation") {
-		t.Fatalf("responseDelayOverrides[] has no methods rule matching MockRedfishOperations; want rule:\n%s", rule)
-	}
-}
+var _ = Describe("SimFleet spec.dpuAgent.bmc schema", func() {
+	It("declares no defaults anywhere under bmc", func() {
+		assertNoDefaults("spec.dpuAgent.bmc", dpuAgentBMCSchema())
+	})
+
+	It("bounds every string, delay and list", func() {
+		bmc := dpuAgentBMCSchema()
+
+		assertStringBounds("psid", bmc.Properties["psid"], 1, 32)
+		firmware := bmc.Properties["firmware"]
+		for _, name := range []string{"bmc", "erot", "uefi", "nic"} {
+			assertStringBounds("firmware."+name, firmware.Properties[name], 1, 64)
+		}
+
+		assertDelayBounds("responseDelay", bmc.Properties["responseDelay"])
+
+		overrides := bmc.Properties["responseDelayOverrides"]
+		Expect(overrides.MaxItems).To(HaveValue(BeEquivalentTo(32)), "responseDelayOverrides maxItems")
+		item := delayOverrideItemSchema()
+		assertDelayBounds("responseDelayOverrides[]", item)
+		Expect(item.Required).To(ContainElement("name"), "responseDelayOverrides[].name is not required")
+
+		methods := item.Properties["methods"]
+		Expect(methods.MinItems).To(HaveValue(BeEquivalentTo(1)), "methods min items")
+		Expect(methods.MaxItems).To(HaveValue(BeEquivalentTo(4)), "methods max items")
+		Expect(methods.XListType).To(HaveValue(Equal("set")), "methods list type")
+		Expect(methods.Items).NotTo(BeNil(), "methods has no item schema")
+		Expect(methods.Items.Schema).NotTo(BeNil(), "methods has no item schema")
+		Expect(enumStrings(methods.Items.Schema.Enum)).To(Equal([]string{"*", "DELETE", "GET", "PATCH", "POST"}),
+			"methods enum")
+
+		Expect(overrides.XListType).To(HaveValue(Equal("atomic")), "responseDelayOverrides list type")
+		Expect(bmc.Required).To(BeEmpty(), "all bmc fields are optional")
+	})
+
+	It("enumerates override names from the mock's route table", func() {
+		Expect(scalev1alpha1.MockRedfishOperations).To(HaveLen(35),
+			"MockRedfishOperations should hold the 35 operations of the pinned mock")
+		got := enumStrings(delayOverrideItemSchema().Properties["name"].Enum)
+		Expect(got).To(Equal(slices.Sorted(maps.Keys(scalev1alpha1.MockRedfishOperations))),
+			"responseDelayOverrides[].name enum")
+	})
+
+	It("restricts override methods to those the named operation serves", func() {
+		rule := "!has(self.methods) || self.methods.all(m, m == '*' || m in " +
+			mockRedfishOperationsCEL() + "[self.name])"
+		Expect(hasValidationRule(delayOverrideItemSchema().XValidations, rule,
+			"methods must be served by the named Redfish operation")).To(BeTrue(),
+			"responseDelayOverrides[] has no methods rule matching MockRedfishOperations; want rule:\n%s", rule)
+	})
+})

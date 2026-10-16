@@ -1,0 +1,174 @@
+/*
+Copyright 2026 NVIDIA.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+	"time"
+
+	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
+	virtv1 "kubevirt.io/api/core/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+)
+
+func virtualMachineFleet(name, namespace string) *scalev1alpha1.SimFleet {
+	return &scalev1alpha1.SimFleet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: scalev1alpha1.SimFleetSpec{
+			Replicas:              1,
+			DevicesPerDPUNode:     1,
+			DeviceSelectionLabels: map[string]string{"scale.dpu.nvidia.com/pool": "scale-3000"},
+			VirtualMachineTemplate: &scalev1alpha1.VirtualMachineTemplate{
+				Image: "example.com/node@sha256:test",
+			},
+		},
+	}
+}
+
+// startFleetManager runs both reconcilers the way cmd/main.go wires them and
+// returns a function that stops the manager and waits for it to exit.
+func startFleetManager() func() {
+	GinkgoHelper()
+	return startManager(true)
+}
+
+// startManager runs the SimInstance reconciler, and the SimFleet reconciler
+// when withFleet is set, and returns a function that stops the manager and
+// waits for it to exit.
+func startManager(withFleet bool) func() {
+	GinkgoHelper()
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:                 scheme.Scheme,
+		Cache:                  ManagerCacheOptions(),
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+		Controller:             config.Controller{SkipNameValidation: ptr.To(true)},
+	})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(SetupIndexes(ctx, mgr)).To(Succeed())
+	issuer := &countingServiceAccountIssuer{}
+	if withFleet {
+		Expect((&SimFleetReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr)).To(Succeed())
+	}
+	Expect((&SimInstanceReconciler{
+		Client:                    mgr.GetClient(),
+		APIReader:                 mgr.GetAPIReader(),
+		Scheme:                    mgr.GetScheme(),
+		ServiceAccountTokenIssuer: issuer,
+		ManagementCA:              []byte("test-ca"),
+	}).SetupWithManager(mgr)).To(Succeed())
+
+	mgrCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer GinkgoRecover()
+		defer close(done)
+		Expect(mgr.Start(mgrCtx)).To(Succeed())
+	}()
+	stop := func() {
+		cancel()
+		Eventually(done, time.Minute).Should(BeClosed())
+	}
+	DeferCleanup(stop)
+	return stop
+}
+
+type ordinalChild struct {
+	name string
+	obj  client.Object
+}
+
+// ordinalChildren are the objects a SimInstance creates for its ordinal.
+func ordinalChildren(fleet *scalev1alpha1.SimFleet, ordinal int) []ordinalChild {
+	credentialName := dpuAgentCredentialName(fleet, ordinal)
+	return []ordinalChild{
+		{credentialName, &corev1.ServiceAccount{}},
+		{credentialName, &rbacv1.Role{}},
+		{credentialName, &rbacv1.RoleBinding{}},
+		{utils.CloudInitSecretName(fleet.Name, ordinal), &corev1.Secret{}},
+		{utils.DeviceName(fleet.Name, ordinal), &provisioningv1.DPUDevice{}},
+		{utils.VirtualMachineName(fleet.Name, ordinal), &virtv1.VirtualMachine{}},
+	}
+}
+
+func getFleetInstance(g Gomega, fleet *scalev1alpha1.SimFleet, ordinal int) *scalev1alpha1.SimInstance {
+	instance := &scalev1alpha1.SimInstance{}
+	key := client.ObjectKey{Name: utils.InstanceName(fleet.Name, ordinal), Namespace: fleet.Namespace}
+	g.Expect(k8sClient.Get(ctx, key, instance)).To(Succeed())
+	return instance
+}
+
+// removeWithoutFinalizers deletes obj so that it is gone at once, as if
+// whatever holds it had already let go.
+func removeWithoutFinalizers(obj client.Object) {
+	GinkgoHelper()
+	base := obj.DeepCopyObject().(client.Object)
+	obj.SetFinalizers(nil)
+	Expect(k8sClient.Patch(ctx, obj, client.MergeFrom(base))).To(Succeed())
+	Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, obj))).To(Succeed())
+	Eventually(func() bool {
+		return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), obj.DeepCopyObject().(client.Object)))
+	}, 30*time.Second, 100*time.Millisecond).Should(BeTrue(), "%T %s still exists", obj, obj.GetName())
+}
+
+// bootGuest stands in for KubeVirt, which envtest does not run: it creates
+// the VMI the VirtualMachine would run, with a bridged address and Ready.
+// The VMI CRD has no status subresource, so the status is written on create.
+func bootGuest(vm *virtv1.VirtualMachine, address string) *virtv1.VirtualMachineInstance {
+	GinkgoHelper()
+	vmi := &virtv1.VirtualMachineInstance{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      vm.Name,
+			Namespace: vm.Namespace,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: virtv1.GroupVersion.String(),
+				Kind:       "VirtualMachine",
+				Name:       vm.Name,
+				UID:        vm.UID,
+				Controller: ptr.To(true),
+			}},
+		},
+		Spec: virtv1.VirtualMachineInstanceSpec{Domain: virtv1.DomainSpec{Devices: virtv1.Devices{}}},
+		Status: virtv1.VirtualMachineInstanceStatus{
+			Phase:      virtv1.Running,
+			Interfaces: []virtv1.VirtualMachineInstanceNetworkInterface{{Name: bridgedNetworkName, IP: address}},
+			Conditions: []virtv1.VirtualMachineInstanceCondition{{
+				Type:   virtv1.VirtualMachineInstanceReady,
+				Status: corev1.ConditionTrue,
+			}},
+		},
+	}
+	Expect(k8sClient.Create(ctx, vmi)).To(Succeed())
+	return vmi
+}
