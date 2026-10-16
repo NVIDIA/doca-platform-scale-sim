@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+// Package naming derives the deterministic names and identity labels of the
+// objects a fleet creates, and maps device ordinals onto DPUNode hosts.
+package naming
 
 import (
 	"fmt"

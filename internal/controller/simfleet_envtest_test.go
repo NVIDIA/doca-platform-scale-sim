@@ -33,7 +33,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/ownership"
 )
 
 var _ = Describe("SimFleet reconciler", func() {
@@ -55,26 +56,26 @@ var _ = Describe("SimFleet reconciler", func() {
 		Eventually(func(g Gomega) {
 			for ordinal := range fleet.Spec.Replicas {
 				instance := getFleetInstance(g, fleet, ordinal)
-				g.Expect(controlledBy(instance, scalev1alpha1.GroupVersion.String(), "SimFleet", fleet.Name, fleet.UID)).
+				g.Expect(ownership.ControlledBy(instance, scalev1alpha1.GroupVersion.String(), "SimFleet", fleet.Name, fleet.UID)).
 					To(BeTrue(), "SimInstance %d owner = %+v", ordinal, instance.OwnerReferences)
 				g.Expect(instanceConditionTrue(instance, scalev1alpha1.SimInstanceChildrenCreated)).To(BeTrue(),
 					"SimInstance %d conditions = %+v", ordinal, instance.Status.Conditions)
 				for _, child := range []ordinalChild{
-					{utils.DeviceName(fleet.Name, ordinal), &provisioningv1.DPUDevice{}},
-					{utils.VirtualMachineName(fleet.Name, ordinal), &virtv1.VirtualMachine{}},
+					{naming.DeviceName(fleet.Name, ordinal), &provisioningv1.DPUDevice{}},
+					{naming.VirtualMachineName(fleet.Name, ordinal), &virtv1.VirtualMachine{}},
 				} {
 					key := client.ObjectKey{Name: child.name, Namespace: fleet.Namespace}
 					g.Expect(k8sClient.Get(ctx, key, child.obj)).To(Succeed(), "get %T %s", child.obj, child.name)
-					g.Expect(controlledBy(child.obj, scalev1alpha1.GroupVersion.String(), "SimInstance",
+					g.Expect(ownership.ControlledBy(child.obj, scalev1alpha1.GroupVersion.String(), "SimInstance",
 						instance.Name, instance.UID)).
 						To(BeTrue(), "%T %s owner = %+v", child.obj, child.name, child.obj.GetOwnerReferences())
 				}
 			}
-			for hostIndex := range utils.DesiredNodeCount(fleet.Spec.Replicas, fleet.Spec.DevicesPerDPUNode) {
+			for hostIndex := range naming.DesiredNodeCount(fleet.Spec.Replicas, fleet.Spec.DevicesPerDPUNode) {
 				node := &provisioningv1.DPUNode{}
-				key := client.ObjectKey{Name: utils.NodeName(fleet.Name, hostIndex), Namespace: fleet.Namespace}
+				key := client.ObjectKey{Name: naming.NodeName(fleet.Name, hostIndex), Namespace: fleet.Namespace}
 				g.Expect(k8sClient.Get(ctx, key, node)).To(Succeed(), "get DPUNode host %d", hostIndex)
-				g.Expect(controlledBy(node, scalev1alpha1.GroupVersion.String(), "SimFleet", fleet.Name, fleet.UID)).
+				g.Expect(ownership.ControlledBy(node, scalev1alpha1.GroupVersion.String(), "SimFleet", fleet.Name, fleet.UID)).
 					To(BeTrue(), "DPUNode host %d owner = %+v", hostIndex, node.OwnerReferences)
 			}
 			current := &scalev1alpha1.SimFleet{}
@@ -108,14 +109,14 @@ var _ = Describe("SimFleet reconciler", func() {
 
 		device := &provisioningv1.DPUDevice{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{
-			Name: utils.DeviceName(fleet.Name, 0), Namespace: fleet.Namespace,
+			Name: naming.DeviceName(fleet.Name, 0), Namespace: fleet.Namespace,
 		}, device)).To(Succeed())
 		oldDeviceUID := device.UID
 		removeWithoutFinalizers(device)
 
 		instance := &scalev1alpha1.SimInstance{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{
-			Name: utils.InstanceName(fleet.Name, 1), Namespace: fleet.Namespace,
+			Name: naming.InstanceName(fleet.Name, 1), Namespace: fleet.Namespace,
 		}, instance)).To(Succeed())
 		oldInstanceUID := instance.UID
 		removeWithoutFinalizers(instance)
@@ -133,7 +134,7 @@ var _ = Describe("SimFleet reconciler", func() {
 		Eventually(func(g Gomega) {
 			recreated := &provisioningv1.DPUDevice{}
 			g.Expect(k8sClient.Get(ctx, client.ObjectKey{
-				Name: utils.DeviceName(fleet.Name, 0), Namespace: fleet.Namespace,
+				Name: naming.DeviceName(fleet.Name, 0), Namespace: fleet.Namespace,
 			}, recreated)).To(Succeed())
 			g.Expect(recreated.UID).NotTo(Equal(oldDeviceUID))
 			g.Expect(getFleetInstance(g, fleet, 1).UID).NotTo(Equal(oldInstanceUID))
@@ -151,7 +152,7 @@ var _ = Describe("SimFleet reconciler", func() {
 		for ordinal := range fleet.Spec.Replicas {
 			vm := &virtv1.VirtualMachine{}
 			Expect(k8sClient.Get(ctx, client.ObjectKey{
-				Name: utils.VirtualMachineName(fleet.Name, ordinal), Namespace: fleet.Namespace,
+				Name: naming.VirtualMachineName(fleet.Name, ordinal), Namespace: fleet.Namespace,
 			}, vm)).To(Succeed())
 			bootGuest(vm, fmt.Sprintf("10.244.0.%d", 10+ordinal))
 		}
@@ -159,7 +160,7 @@ var _ = Describe("SimFleet reconciler", func() {
 			for ordinal := range fleet.Spec.Replicas {
 				device := &provisioningv1.DPUDevice{}
 				g.Expect(k8sClient.Get(ctx, client.ObjectKey{
-					Name: utils.DeviceName(fleet.Name, ordinal), Namespace: fleet.Namespace,
+					Name: naming.DeviceName(fleet.Name, ordinal), Namespace: fleet.Namespace,
 				}, device)).To(Succeed())
 				for key, value := range fleet.Spec.DeviceSelectionLabels {
 					g.Expect(device.Labels).To(HaveKeyWithValue(key, value), "DPUDevice %d", ordinal)
@@ -215,7 +216,7 @@ var _ = Describe("SimFleet reconciler", func() {
 						Wrap(err).Now()
 				}
 				g.Expect(current.DeletionTimestamp.IsZero()).To(BeFalse())
-				g.Expect(current.Finalizers).To(ContainElement(simFleetTeardownFinalizer))
+				g.Expect(current.Finalizers).To(ContainElement(scalev1alpha1.SimFleetFinalizer))
 			}
 			g.Expect(instances.Items).To(BeEmpty())
 			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "SimFleet still exists: %v", err)
@@ -224,7 +225,7 @@ var _ = Describe("SimFleet reconciler", func() {
 		Eventually(func(g Gomega) {
 			recordDeviceEvents()
 			for ordinal := range fleet.Spec.Replicas {
-				name := utils.DeviceName(fleet.Name, ordinal)
+				name := naming.DeviceName(fleet.Name, ordinal)
 				wasQuarantined, deleted := deletedQuarantined[name]
 				g.Expect(deleted).To(BeTrue(), "no delete event for DPUDevice %s", name)
 				if !wasQuarantined {
@@ -233,9 +234,9 @@ var _ = Describe("SimFleet reconciler", func() {
 			}
 		}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
 		// The DPUNodes are left to garbage collection, which envtest does not run.
-		for hostIndex := range utils.DesiredNodeCount(fleet.Spec.Replicas, fleet.Spec.DevicesPerDPUNode) {
+		for hostIndex := range naming.DesiredNodeCount(fleet.Spec.Replicas, fleet.Spec.DevicesPerDPUNode) {
 			node := &provisioningv1.DPUNode{}
-			key := client.ObjectKey{Name: utils.NodeName(fleet.Name, hostIndex), Namespace: fleet.Namespace}
+			key := client.ObjectKey{Name: naming.NodeName(fleet.Name, hostIndex), Namespace: fleet.Namespace}
 			Expect(k8sClient.Get(ctx, key, node)).To(Succeed(), "DPUNode host %d", hostIndex)
 			Expect(node.DeletionTimestamp.IsZero()).To(BeTrue(), "DPUNode host %d was deleted", hostIndex)
 		}
@@ -255,7 +256,7 @@ var _ = Describe("SimFleet reconciler", func() {
 		Eventually(func(g Gomega) {
 			for _, ordinal := range []int{1, 2} {
 				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name: utils.InstanceName(fleet.Name, ordinal), Namespace: fleet.Namespace,
+					Name: naming.InstanceName(fleet.Name, ordinal), Namespace: fleet.Namespace,
 				}, &scalev1alpha1.SimInstance{})
 				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "SimInstance %d still exists: %v", ordinal, err)
 				for _, child := range ordinalChildren(fleet, ordinal) {

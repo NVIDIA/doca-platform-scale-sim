@@ -23,6 +23,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// SimFleetFinalizer holds a deleted SimFleet until every SimInstance it owns
+// is gone.
+const SimFleetFinalizer = "scale.dpu.nvidia.com/simfleet"
+
+// Condition types reported on SimFleet status.
 const (
 	ConditionInventoryReady       = "InventoryReady"
 	ConditionDPUsObserved         = "DPUsObserved"
@@ -46,16 +51,22 @@ var ReservedDeviceLabelKeys = []string{
 	provisioningv1.DPUNodeNameLabel,
 }
 
+// TemplateMetadata is the metadata copied onto the objects a template
+// renders. Labels never override the controller's own identity labels.
 type TemplateMetadata struct {
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
+// DPUNodeTemplateSpec sets DPUNode spec fields when the DPUNode is created;
+// later edits do not change existing DPUNodes. An unset nodeRebootMethod
+// defaults to external: {}.
 type DPUNodeTemplateSpec struct {
 	// +optional
 	NodeRebootMethod *provisioningv1.NodeRebootMethod `json:"nodeRebootMethod,omitempty"`
 }
 
+// DPUNodeTemplate shapes the DPUNode the fleet creates for each host.
 type DPUNodeTemplate struct {
 	// +optional
 	Metadata TemplateMetadata `json:"metadata,omitempty"`
@@ -63,11 +74,16 @@ type DPUNodeTemplate struct {
 	Spec DPUNodeTemplateSpec `json:"spec,omitempty"`
 }
 
+// DPUDeviceTemplateSpec sets DPUDevice spec fields when the DPUDevice is
+// created; later edits do not change existing DPUDevices. An unset numberOfPFs
+// defaults to 1.
 type DPUDeviceTemplateSpec struct {
 	// +optional
 	NumberOfPFs *int `json:"numberOfPFs,omitempty"`
 }
 
+// DPUDeviceTemplate shapes the DPUDevice created for each ordinal. Reserved
+// device label keys in its labels are silently dropped.
 type DPUDeviceTemplate struct {
 	// +optional
 	Metadata TemplateMetadata `json:"metadata,omitempty"`
@@ -75,11 +91,17 @@ type DPUDeviceTemplate struct {
 	Spec DPUDeviceTemplateSpec `json:"spec,omitempty"`
 }
 
+// VirtualMachineResources are the guest's resource requests. A missing cpu
+// request defaults to 1 and a missing memory request to 1Gi; other requests
+// pass through unchanged.
 type VirtualMachineResources struct {
 	// +optional
 	Requests corev1.ResourceList `json:"requests,omitempty"`
 }
 
+// VirtualMachineStorage describes the guest's root disk. Only ephemeral
+// container-disk storage is supported; the controller refuses ephemeral: false.
+// rootDiskSize is accepted but not yet applied.
 type VirtualMachineStorage struct {
 	// +optional
 	RootDiskSize string `json:"rootDiskSize,omitempty"`
@@ -88,12 +110,16 @@ type VirtualMachineStorage struct {
 	Ephemeral *bool `json:"ephemeral,omitempty"`
 }
 
+// PodNetwork configures the guest's pod network interface. Only bridge
+// binding is supported; the controller refuses bridge: false.
 type PodNetwork struct {
 	// +kubebuilder:default=true
 	// +optional
 	Bridge *bool `json:"bridge,omitempty"`
 }
 
+// VirtualMachineTemplate shapes the KubeVirt VirtualMachine that backs each
+// simulated DPU. A fleet without one boots no guests.
 type VirtualMachineTemplate struct {
 	// +kubebuilder:validation:MinLength=1
 	// +required
@@ -130,6 +156,7 @@ type VirtualMachineTemplate struct {
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
+// DPUClusterReference names a DPF DPUCluster.
 type DPUClusterReference struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
@@ -137,10 +164,18 @@ type DPUClusterReference struct {
 	Namespace string `json:"namespace"`
 }
 
+// BootstrapSpec records the DPUCluster the fleet's guests are expected to
+// join. The controller does not read or contact that cluster; it writes the
+// reference into each guest's identity file. The cluster a guest joins is
+// decided by the join Secret DPF creates for its DPU.
 type BootstrapSpec struct {
 	DPUClusterRef DPUClusterReference `json:"dpuClusterRef"`
 }
 
+// DPUAgentSpec configures the mock DPU agent each guest runs. Disabling it
+// also stops the guest from joining the DPU cluster: the guest gets no agent
+// configuration and no management credential, and both the agent and the
+// join unit are masked.
 type DPUAgentSpec struct {
 	// +kubebuilder:default=true
 	// +optional

@@ -27,6 +27,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 func inventoryChildPredicate() predicate.Predicate {
@@ -108,9 +110,9 @@ func inventoryChildChanged(oldObj, newObj client.Object) bool {
 // drift is restored on the owner's next pass rather than on every DPF label
 // change.
 var inventoryManagedLabelKeys = []string{
-	labelFleetName,
-	labelFleetUID,
-	labelOrdinal,
+	naming.LabelFleetName,
+	naming.LabelFleetUID,
+	naming.LabelOrdinal,
 	provisioningv1.DPUNodeNameLabel,
 }
 
@@ -204,7 +206,7 @@ func vmiWatchChanged(oldObj, newObj client.Object) bool {
 	// The bridged address becomes the device's spec.bmcIP. It appears on its
 	// own status update, before Ready and without a phase change, so ignoring
 	// it would leave the device unselectable until some unrelated event.
-	if guestBridgedIPv4(oldVMI) != guestBridgedIPv4(newVMI) {
+	if kubevirt.GuestBridgedIPv4(oldVMI) != kubevirt.GuestBridgedIPv4(newVMI) {
 		return true
 	}
 	oldReady, oldFound := vmiReadyStatus(oldVMI)

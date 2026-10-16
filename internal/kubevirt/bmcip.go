@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package kubevirt
 
 import (
 	"net/netip"
@@ -22,32 +22,33 @@ import (
 	virtv1 "kubevirt.io/api/core/v1"
 )
 
-// bridgedNetworkName is the pod network virtualmachine.go attaches, and the
+// BridgedNetworkName is the pod network DesiredVirtualMachine attaches, and the
 // name KubeVirt reports that interface's address under.
-const bridgedNetworkName = "default"
+const BridgedNetworkName = "default"
 
-// masqueradeGatewayIP is the address KubeVirt reports for a guest whose
-// interface has not produced a real address. It is the virt-launcher pod's own
-// gateway, so DPF dialling it would reach the pod rather than the guest BMC.
-const masqueradeGatewayIP = "10.0.2.2"
+// masqueradeGuestNetwork is KubeVirt's default masquerade vmNetworkCIDR
+// (gateway 10.0.2.1, guest 10.0.2.2). Its addresses are only reachable from
+// inside the virt-launcher pod, so publishing one would point DPF at an
+// address that never reaches the guest BMC.
+var masqueradeGuestNetwork = netip.MustParsePrefix("10.0.2.0/24")
 
-// guestBridgedIPv4 is the address DPF must open Redfish against: the IPv4 the
+// GuestBridgedIPv4 is the address DPF must open Redfish against: the IPv4 the
 // guest reports on its bridged pod network. It returns "" whenever the VMI has
 // not produced one this fleet is willing to publish, which is the normal state
 // for most of a guest's boot.
-func guestBridgedIPv4(vmi *virtv1.VirtualMachineInstance) string {
+func GuestBridgedIPv4(vmi *virtv1.VirtualMachineInstance) string {
 	if vmi == nil {
 		return ""
 	}
 	for _, iface := range vmi.Status.Interfaces {
-		if iface.Name != bridgedNetworkName {
+		if iface.Name != BridgedNetworkName {
 			continue
 		}
 		address, err := netip.ParseAddr(iface.IP)
 		if err != nil || !address.Is4() {
 			return ""
 		}
-		if iface.IP == masqueradeGatewayIP {
+		if masqueradeGuestNetwork.Contains(address) {
 			return ""
 		}
 		return iface.IP

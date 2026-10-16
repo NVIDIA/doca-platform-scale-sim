@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package dpuagent
 
 import (
 	"context"
@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 // credentialOrdinal is the fleet ordinal every credential test issues for. It
@@ -62,7 +62,7 @@ func credentialFleet() *scalev1alpha1.SimFleet {
 // exists in any of these tests.
 func credentialDPUKey(fleet *scalev1alpha1.SimFleet) client.ObjectKey {
 	return client.ObjectKey{
-		Name:      utils.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, credentialOrdinal),
+		Name:      naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, credentialOrdinal),
 		Namespace: fleet.Namespace,
 	}
 }
@@ -73,7 +73,7 @@ func assertFleetLabels(
 	ordinal string,
 ) {
 	GinkgoHelper()
-	Expect(labels).To(Equal(inventoryLabels(fleet, ordinal)))
+	Expect(labels).To(Equal(naming.InventoryLabels(fleet, ordinal)))
 }
 
 // tokenIssuerClient returns a client whose token subresource create is handled
@@ -105,7 +105,7 @@ var _ = Describe("DPU agent credentials", func() {
 		It("grants the Role least privilege", func() {
 			fleet := credentialFleet()
 			key := credentialDPUKey(fleet)
-			role := desiredDPUAgentRole(fleet, credentialOrdinal)
+			role := DesiredRole(fleet, credentialOrdinal)
 
 			Expect(key.Name).To(Equal("scale-3000-host-0001-scale-3000-device-000012"), "test fixture DPU name")
 			// The credential sits in a guest for hours, so it grants exactly the two
@@ -120,7 +120,7 @@ var _ = Describe("DPU agent credentials", func() {
 				{
 					APIGroups:     []string{""},
 					Resources:     []string{"secrets"},
-					ResourceNames: []string{utils.KubeadmJoinSecretName(key.Name)},
+					ResourceNames: []string{naming.KubeadmJoinSecretName(key.Name)},
 					Verbs:         []string{"get"},
 				},
 			}
@@ -132,8 +132,8 @@ var _ = Describe("DPU agent credentials", func() {
 		It("binds the Role to the DPU's ServiceAccount", func() {
 			fleet := credentialFleet()
 			key := credentialDPUKey(fleet)
-			serviceAccount := desiredDPUAgentServiceAccount(fleet, credentialOrdinal)
-			binding := desiredDPUAgentRoleBinding(fleet, credentialOrdinal)
+			serviceAccount := DesiredServiceAccount(fleet, credentialOrdinal)
+			binding := DesiredRoleBinding(fleet, credentialOrdinal)
 
 			Expect(client.ObjectKeyFromObject(serviceAccount)).To(Equal(key), "ServiceAccount identity")
 			assertFleetLabels(serviceAccount.Labels, fleet, "000012")
@@ -152,7 +152,7 @@ var _ = Describe("DPU agent credentials", func() {
 		It("contains only the server, CA and service-account token", func() {
 			token := []byte("service-account-token")
 			ca := []byte("management-ca")
-			data, err := managementKubeconfig(token, ca)
+			data, err := ManagementKubeconfig(token, ca)
 			Expect(err).NotTo(HaveOccurred())
 			config, err := clientcmd.Load(data)
 			Expect(err).NotTo(HaveOccurred(), "decode kubeconfig")
@@ -175,7 +175,7 @@ var _ = Describe("DPU agent credentials", func() {
 
 		DescribeTable("rejects empty inputs",
 			func(token, ca []byte) {
-				_, err := managementKubeconfig(token, ca)
+				_, err := ManagementKubeconfig(token, ca)
 				Expect(err).To(HaveOccurred())
 			},
 			Entry("empty token", nil, []byte("management-ca")),
@@ -279,44 +279,4 @@ var _ = Describe("DPU agent credentials", func() {
 		})
 	})
 
-	// Only a fleet whose guests boot with an enabled agent gets per-DPU
-	// credentials. Creating a ServiceAccount, Role, and RoleBinding for any other
-	// fleet grants management API access nothing will ever use.
-	Describe("Eligibility", func() {
-		DescribeTable("is eligible only for a fleet that can issue credentials",
-			func(prepare func(*scalev1alpha1.SimFleet), eligible bool) {
-				fleet := credentialFleet()
-				prepare(fleet)
-				Expect(credentialsEligible(fleet)).To(Equal(eligible))
-			},
-			Entry("a VM template and an enabled agent", func(fleet *scalev1alpha1.SimFleet) {
-				fleet.Spec.VirtualMachineTemplate = &scalev1alpha1.VirtualMachineTemplate{
-					Image: "example.com/node@sha256:test",
-				}
-				fleet.Spec.DPUAgent = &scalev1alpha1.DPUAgentSpec{Enabled: ptr.To(true)}
-			}, true),
-			// No VirtualMachine means no guest, and the cloud-init pass that
-			// issues credentials returns before it reaches them.
-			Entry("no VM template", func(fleet *scalev1alpha1.SimFleet) {
-				fleet.Spec.DPUAgent = &scalev1alpha1.DPUAgentSpec{Enabled: ptr.To(true)}
-			}, false),
-			// A guest with the agent off gets a payload with no credential in
-			// it, and both units runtime-masked.
-			Entry("a disabled agent", func(fleet *scalev1alpha1.SimFleet) {
-				fleet.Spec.VirtualMachineTemplate = &scalev1alpha1.VirtualMachineTemplate{
-					Image: "example.com/node@sha256:test",
-				}
-				fleet.Spec.DPUAgent = &scalev1alpha1.DPUAgentSpec{Enabled: ptr.To(false)}
-			}, false),
-			// A template this controller refuses never produces a guest, so
-			// the pass fails before issuing anything.
-			Entry("a template this controller refuses", func(fleet *scalev1alpha1.SimFleet) {
-				fleet.Spec.VirtualMachineTemplate = &scalev1alpha1.VirtualMachineTemplate{
-					Image:   "example.com/node@sha256:test",
-					Storage: &scalev1alpha1.VirtualMachineStorage{Ephemeral: ptr.To(false)},
-				}
-				fleet.Spec.DPUAgent = &scalev1alpha1.DPUAgentSpec{Enabled: ptr.To(true)}
-			}, false),
-		)
-	})
 })

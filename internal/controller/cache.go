@@ -25,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 // ManagerCacheOptions scopes the credential-bearing kinds to objects this
@@ -41,9 +43,9 @@ func ManagerCacheOptions() cache.Options {
 }
 
 func fleetLabelSelector() labels.Selector {
-	requirement, err := labels.NewRequirement(labelFleetName, selection.Exists, nil)
+	requirement, err := labels.NewRequirement(naming.LabelFleetName, selection.Exists, nil)
 	if err != nil {
-		panic(fmt.Sprintf("build %s selector: %v", labelFleetName, err))
+		panic(fmt.Sprintf("build %s selector: %v", naming.LabelFleetName, err))
 	}
 	return labels.NewSelector().Add(*requirement)
 }

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package dpuagent
 
 import (
 	mockconfig "github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/config"
@@ -22,11 +22,27 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
 )
+
+func fleetWith(agent *scalev1alpha1.DPUAgentSpec) *scalev1alpha1.SimFleet {
+	fleet := &scalev1alpha1.SimFleet{
+		ObjectMeta: metav1.ObjectMeta{Name: "scale-3000", Namespace: "test-ns"},
+		Spec: scalev1alpha1.SimFleetSpec{
+			Replicas:              1,
+			DevicesPerDPUNode:     1,
+			DeviceSelectionLabels: map[string]string{"pool": "scale-3000"},
+		},
+	}
+	if agent != nil {
+		fleet.Spec.DPUAgent = agent
+	}
+	return fleet
+}
 
 type renderedMockDPUAgentConfig struct {
 	DPUType string `json:"dpuType"`
@@ -66,7 +82,7 @@ dpuType: bf3
 // route table.
 func startMock(agent *scalev1alpha1.DPUAgentSpec) *mockconfig.Config {
 	GinkgoHelper()
-	rendered, err := renderMockDPUAgentConfig(fleetWith(agent), "MT0000000000")
+	rendered, err := RenderConfig(fleetWith(agent), "MT0000000000")
 	Expect(err).NotTo(HaveOccurred())
 	parsed, err := mockconfig.Parse([]byte(rendered))
 	Expect(err).NotTo(HaveOccurred(), "mock refuses the rendered config:\n%s", rendered)
@@ -90,7 +106,7 @@ func renderBMC(bmc *scalev1alpha1.DPUAgentBMCSpec) *mockconfig.Config {
 var _ = Describe("Mock DPU agent config", func() {
 	Describe("rendering", func() {
 		It("renders the defaults when the fleet has no dpuAgent", func() {
-			config, err := renderMockDPUAgentConfig(fleetWith(nil), "MT0000000000")
+			config, err := RenderConfig(fleetWith(nil), "MT0000000000")
 			Expect(err).NotTo(HaveOccurred())
 
 			var got renderedMockDPUAgentConfig
@@ -107,7 +123,7 @@ var _ = Describe("Mock DPU agent config", func() {
 
 		It("renders an empty config when the agent is disabled", func() {
 			disabled := false
-			config, err := renderMockDPUAgentConfig(
+			config, err := RenderConfig(
 				fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled}),
 				"MT0000000000",
 			)
@@ -118,7 +134,7 @@ var _ = Describe("Mock DPU agent config", func() {
 		It("renders dpuType and rebootMethod overrides", func() {
 			bf4 := "bf4"
 			rebootMethod := "PowerCycle,SLR"
-			config, err := renderMockDPUAgentConfig(
+			config, err := RenderConfig(
 				fleetWith(&scalev1alpha1.DPUAgentSpec{
 					DPUType:      &bf4,
 					RebootMethod: &rebootMethod,
@@ -136,7 +152,7 @@ var _ = Describe("Mock DPU agent config", func() {
 
 		DescribeTable("renders the unchanged pre-bmc bytes when bmc is unset",
 			func(agent *scalev1alpha1.DPUAgentSpec) {
-				config, err := renderMockDPUAgentConfig(fleetWith(agent), "MT0000000000")
+				config, err := RenderConfig(fleetWith(agent), "MT0000000000")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(config).To(Equal(unsetBMCMockDPUAgentConfig))
 			},
@@ -206,7 +222,7 @@ var _ = Describe("Mock DPU agent config", func() {
 		// A zero range is a real setting ("never delay this"), so it must still be
 		// rendered rather than dropped as empty.
 		It("renders a zero delay rather than dropping it", func() {
-			config, err := renderMockDPUAgentConfig(fleetWith(&scalev1alpha1.DPUAgentSpec{
+			config, err := RenderConfig(fleetWith(&scalev1alpha1.DPUAgentSpec{
 				BMC: &scalev1alpha1.DPUAgentBMCSpec{
 					ResponseDelay: &scalev1alpha1.DPUAgentResponseDelay{},
 					ResponseDelayOverrides: []scalev1alpha1.DPUAgentResponseDelayOverride{
@@ -232,17 +248,17 @@ var _ = Describe("Mock DPU agent config", func() {
 			})
 			before := fleet.DeepCopy()
 
-			_ = resolvedDPUAgentSpec(fleet)
+			_ = resolvedSpec(fleet)
 
-			Expect(equality.Semantic.DeepEqual(before, fleet)).To(BeTrue(), "resolvedDPUAgentSpec mutated the fleet object")
+			Expect(equality.Semantic.DeepEqual(before, fleet)).To(BeTrue(), "resolvedSpec mutated the fleet object")
 		})
 
 		It("reports the agent enabled unless it is explicitly disabled", func() {
-			Expect(dpuAgentEnabled(fleetWith(nil))).To(BeTrue(), "nil dpuAgent defaults to enabled")
+			Expect(Enabled(fleetWith(nil))).To(BeTrue(), "nil dpuAgent defaults to enabled")
 			enabled := true
-			Expect(dpuAgentEnabled(fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &enabled}))).To(BeTrue(), "enabled true")
+			Expect(Enabled(fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &enabled}))).To(BeTrue(), "enabled true")
 			disabled := false
-			Expect(dpuAgentEnabled(fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled}))).To(BeFalse(), "enabled false")
+			Expect(Enabled(fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled}))).To(BeFalse(), "enabled false")
 		})
 	})
 })

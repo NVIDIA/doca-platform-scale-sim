@@ -39,7 +39,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpf"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 func instanceFleet() *scalev1alpha1.SimFleet {
@@ -67,7 +68,7 @@ func instanceFleet() *scalev1alpha1.SimFleet {
 func newInstanceFixture(fleet *scalev1alpha1.SimFleet, ordinal int) *scalev1alpha1.SimInstance {
 	return &scalev1alpha1.SimInstance{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.InstanceName(fleet.Name, ordinal),
+			Name:      naming.InstanceName(fleet.Name, ordinal),
 			Namespace: fleet.Namespace,
 			UID:       types.UID(fmt.Sprintf("instance-uid-%d", ordinal)),
 			OwnerReferences: []metav1.OwnerReference{{
@@ -81,7 +82,7 @@ func newInstanceFixture(fleet *scalev1alpha1.SimFleet, ordinal int) *scalev1alph
 		},
 		Spec: scalev1alpha1.SimInstanceSpec{
 			Ordinal:   ordinal,
-			HostIndex: utils.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode),
+			HostIndex: naming.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode),
 		},
 	}
 }
@@ -104,9 +105,9 @@ func fleetInstance(
 ) *scalev1alpha1.SimInstance {
 	instance := newInstanceFixture(fleet, ordinal)
 	instance.Labels = map[string]string{
-		labelFleetName: fleet.Name,
-		labelFleetUID:  string(fleet.UID),
-		labelOrdinal:   fmt.Sprintf("%06d", ordinal),
+		naming.LabelFleetName: fleet.Name,
+		naming.LabelFleetUID:  string(fleet.UID),
+		naming.LabelOrdinal:   fmt.Sprintf("%06d", ordinal),
 	}
 	instance.Status.Phase = phase
 	for _, conditionType := range trueConditions {
@@ -137,7 +138,7 @@ func instanceMap(objects ...client.Object) map[int]*scalev1alpha1.SimInstance {
 }
 
 func ownedHostNode(fleet *scalev1alpha1.SimFleet, hostIndex int) *provisioningv1.DPUNode {
-	node := desiredHostNode(fleet, hostIndex, fleet.Spec.Replicas)
+	node := dpf.DesiredHostNode(fleet, hostIndex, fleet.Spec.Replicas)
 	node.OwnerReferences = []metav1.OwnerReference{
 		*metav1.NewControllerRef(fleet, scalev1alpha1.GroupVersion.WithKind("SimFleet")),
 	}
@@ -231,6 +232,26 @@ func expectCondition(
 	Expect(condition.Reason).To(Equal(reason), "condition %s reason (%s)", conditionType, condition.Message)
 }
 
+// Kinds of client write the fleet harness records. Each recorded call is the
+// kind, a space, and the written object's name or state.
+const (
+	callFinalizers     = "finalizers"
+	callStatus         = "status"
+	callCreateInstance = "create"
+	callDeleteInstance = "delete"
+	callCreateNode     = "new dpunode"
+	callPatchNode      = "patch dpunode"
+	callDeleteNode     = "drop dpunode"
+)
+
+// nodeCalls are every kind of DPUNode write.
+var nodeCalls = []string{callCreateNode, callPatchNode, callDeleteNode}
+
+// call formats a recorded write the way the fleet harness records it.
+func call(kind, detail string) string {
+	return kind + " " + detail
+}
+
 type fleetHarness struct {
 	client     client.Client
 	reconciler *SimFleetReconciler
@@ -251,27 +272,27 @@ func newFleetHarness(fleet *scalev1alpha1.SimFleet, objects ...client.Object) *f
 			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 				switch obj.(type) {
 				case *scalev1alpha1.SimInstance:
-					h.calls = append(h.calls, "create "+obj.GetName())
+					h.calls = append(h.calls, call(callCreateInstance, obj.GetName()))
 				case *provisioningv1.DPUNode:
-					h.calls = append(h.calls, "new dpunode "+obj.GetName())
+					h.calls = append(h.calls, call(callCreateNode, obj.GetName()))
 				}
 				return c.Create(ctx, obj, opts...)
 			},
 			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 				switch obj.(type) {
 				case *scalev1alpha1.SimInstance:
-					h.calls = append(h.calls, "delete "+obj.GetName())
+					h.calls = append(h.calls, call(callDeleteInstance, obj.GetName()))
 				case *provisioningv1.DPUNode:
-					h.calls = append(h.calls, "drop dpunode "+obj.GetName())
+					h.calls = append(h.calls, call(callDeleteNode, obj.GetName()))
 				}
 				return c.Delete(ctx, obj, opts...)
 			},
 			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 				switch obj.(type) {
 				case *scalev1alpha1.SimFleet:
-					h.calls = append(h.calls, fmt.Sprintf("finalizers %v", obj.GetFinalizers()))
+					h.calls = append(h.calls, call(callFinalizers, fmt.Sprintf("%v", obj.GetFinalizers())))
 				case *provisioningv1.DPUNode:
-					h.calls = append(h.calls, "patch dpunode "+obj.GetName())
+					h.calls = append(h.calls, call(callPatchNode, obj.GetName()))
 				}
 				return c.Patch(ctx, obj, patch, opts...)
 			},
@@ -284,7 +305,7 @@ func newFleetHarness(fleet *scalev1alpha1.SimFleet, objects ...client.Object) *f
 				opts ...client.SubResourcePatchOption,
 			) error {
 				if fleet, ok := obj.(*scalev1alpha1.SimFleet); ok {
-					h.calls = append(h.calls, fmt.Sprintf("status admitted=%d", fleet.Status.AdmittedReplicas))
+					h.calls = append(h.calls, call(callStatus, fmt.Sprintf("admitted=%d", fleet.Status.AdmittedReplicas)))
 				}
 				return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
 			},
@@ -335,20 +356,22 @@ func (h *fleetHarness) releaseInstances() {
 	GinkgoHelper()
 	for _, instance := range h.instances() {
 		base := instance.DeepCopy()
-		controllerutil.RemoveFinalizer(instance, simInstanceTeardownFinalizer)
+		controllerutil.RemoveFinalizer(instance, scalev1alpha1.SimInstanceFinalizer)
 		Expect(h.client.Patch(context.Background(), instance, client.MergeFrom(base))).
 			To(Succeed(), "release SimInstance %s", instance.Name)
 	}
 	h.calls = nil
 }
 
-// callsWithPrefix keeps the recorded calls matching any of prefixes, in order.
-func (h *fleetHarness) callsWithPrefix(prefixes ...string) []string {
+// callsOf returns the recorded client writes of any of kinds. Calls keep the
+// order the client made them in, across kinds, so a test can assert how
+// different kinds of write interleave.
+func (h *fleetHarness) callsOf(kinds ...string) []string {
 	var calls []string
-	for _, call := range h.calls {
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(call, prefix) {
-				calls = append(calls, call)
+	for _, recorded := range h.calls {
+		for _, kind := range kinds {
+			if strings.HasPrefix(recorded, kind+" ") {
+				calls = append(calls, recorded)
 				break
 			}
 		}
@@ -359,7 +382,7 @@ func (h *fleetHarness) callsWithPrefix(prefixes ...string) []string {
 func (h *fleetHarness) expectNode(fleet *scalev1alpha1.SimFleet, hostIndex int, ordinals ...int) {
 	GinkgoHelper()
 	node := &provisioningv1.DPUNode{}
-	key := client.ObjectKey{Name: utils.NodeName(fleet.Name, hostIndex), Namespace: fleet.Namespace}
+	key := client.ObjectKey{Name: naming.NodeName(fleet.Name, hostIndex), Namespace: fleet.Namespace}
 	Expect(h.client.Get(context.Background(), key, node)).To(Succeed(), "get DPUNode for host %d", hostIndex)
 	got := make([]string, 0, len(node.Spec.DPUs))
 	for _, dpu := range node.Spec.DPUs {
@@ -367,7 +390,7 @@ func (h *fleetHarness) expectNode(fleet *scalev1alpha1.SimFleet, hostIndex int, 
 	}
 	want := make([]string, 0, len(ordinals))
 	for _, ordinal := range ordinals {
-		want = append(want, utils.DeviceName(fleet.Name, ordinal))
+		want = append(want, naming.DeviceName(fleet.Name, ordinal))
 	}
 	Expect(got).To(Equal(want), "DPUNode host %d DPUs", hostIndex)
 	owner := metav1.GetControllerOf(node)
@@ -377,7 +400,7 @@ func (h *fleetHarness) expectNode(fleet *scalev1alpha1.SimFleet, hostIndex int, 
 
 func (h *fleetHarness) expectNoNode(fleet *scalev1alpha1.SimFleet, hostIndex int) {
 	GinkgoHelper()
-	key := client.ObjectKey{Name: utils.NodeName(fleet.Name, hostIndex), Namespace: fleet.Namespace}
+	key := client.ObjectKey{Name: naming.NodeName(fleet.Name, hostIndex), Namespace: fleet.Namespace}
 	err := h.client.Get(context.Background(), key, &provisioningv1.DPUNode{})
 	Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Get(DPUNode host %d) error = %v, want NotFound", hostIndex, err)
 }

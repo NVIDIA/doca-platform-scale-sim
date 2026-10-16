@@ -16,7 +16,13 @@ limitations under the License.
 
 package controller
 
-import "errors"
+import (
+	"errors"
+
+	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
+)
 
 // bootstrapConditionError names a configuration the controller refuses, so
 // status can report the configuration rather than a bare failure.
@@ -36,15 +42,24 @@ func (e *bootstrapConditionError) Error() string {
 	return e.message
 }
 
-// virtualMachineConditionError names a VirtualMachine template the controller
-// refuses to render.
-type virtualMachineConditionError struct {
-	reason  string
-	message string
+// bootstrapOutcome is what the fleet's instances report about their
+// per-ordinal Secrets. cloudInit holds the ordinals whose credentials and
+// cloud-init Secret are in place.
+type bootstrapOutcome struct {
+	cloudInit map[int]struct{}
+	// blocked names why an instance that hit no failure still wrote nothing,
+	// so status reports the blockage instead of claiming progress.
+	blocked *bootstrapConditionError
+	err     error
 }
 
-func (e *virtualMachineConditionError) Error() string {
-	return e.message
+// credentialsEligible reports whether an instance could issue a per-ordinal
+// management credential at all: only a fleet that boots guests with the dpuagent
+// enabled gets one.
+func credentialsEligible(fleet *scalev1alpha1.SimFleet) bool {
+	return fleet.Spec.VirtualMachineTemplate != nil &&
+		kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate) == nil &&
+		dpuagent.Enabled(fleet)
 }
 
 // conditionReason names the configuration a condition is blocked on, whether
@@ -54,9 +69,9 @@ func conditionReason(err error) string {
 	if errors.As(err, &bootstrapErr) {
 		return bootstrapErr.reason
 	}
-	var vmErr *virtualMachineConditionError
+	var vmErr *kubevirt.TemplateError
 	if errors.As(err, &vmErr) {
-		return vmErr.reason
+		return vmErr.Reason
 	}
 	return "ReconcileError"
 }
