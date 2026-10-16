@@ -20,65 +20,50 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
-func simFleetCRDPath(t *testing.T) string {
-	t.Helper()
+func simFleetCRDPath() string {
+	GinkgoHelper()
 	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
+	Expect(ok).To(BeTrue(), "runtime.Caller failed")
 	return filepath.Join(filepath.Dir(file), "..", "..", "config", "crd", "bases", "scale.dpu.nvidia.com_simfleets.yaml")
 }
 
-func loadSimFleetCRD(t *testing.T) *apiextensionsv1.CustomResourceDefinition {
-	t.Helper()
-	data, err := os.ReadFile(simFleetCRDPath(t))
-	if err != nil {
-		t.Fatalf("read SimFleet CRD: %v", err)
-	}
+func loadSimFleetCRD() *apiextensionsv1.CustomResourceDefinition {
+	GinkgoHelper()
+	data, err := os.ReadFile(simFleetCRDPath())
+	Expect(err).NotTo(HaveOccurred(), "read SimFleet CRD")
 	var crd apiextensionsv1.CustomResourceDefinition
-	if err := yaml.Unmarshal(data, &crd); err != nil {
-		t.Fatalf("unmarshal SimFleet CRD: %v", err)
-	}
+	Expect(yaml.Unmarshal(data, &crd)).To(Succeed(), "unmarshal SimFleet CRD")
 	return &crd
 }
 
-func simFleetSpecSchema(t *testing.T) *apiextensionsv1.JSONSchemaProps {
-	t.Helper()
-	crd := loadSimFleetCRD(t)
-	if len(crd.Spec.Versions) == 0 {
-		t.Fatal("SimFleet CRD has no versions")
-	}
+func simFleetSpecSchema() *apiextensionsv1.JSONSchemaProps {
+	GinkgoHelper()
+	crd := loadSimFleetCRD()
+	Expect(crd.Spec.Versions).NotTo(BeEmpty(), "SimFleet CRD has no versions")
 	schema := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
-	if schema == nil || schema.Properties == nil {
-		t.Fatal("SimFleet CRD schema is missing properties")
-	}
-	spec, ok := schema.Properties["spec"]
-	if !ok {
-		t.Fatal("SimFleet CRD schema is missing spec")
-	}
+	Expect(schema).NotTo(BeNil(), "SimFleet CRD schema is missing properties")
+	Expect(schema.Properties).NotTo(BeNil(), "SimFleet CRD schema is missing properties")
+	Expect(schema.Properties).To(HaveKey("spec"), "SimFleet CRD schema is missing spec")
+	spec := schema.Properties["spec"]
 	return &spec
 }
 
-func simFleetStatusSchema(t *testing.T) *apiextensionsv1.JSONSchemaProps {
-	t.Helper()
-	crd := loadSimFleetCRD(t)
-	if len(crd.Spec.Versions) == 0 {
-		t.Fatal("SimFleet CRD has no versions")
-	}
+func simFleetStatusSchema() *apiextensionsv1.JSONSchemaProps {
+	GinkgoHelper()
+	crd := loadSimFleetCRD()
+	Expect(crd.Spec.Versions).NotTo(BeEmpty(), "SimFleet CRD has no versions")
 	schema := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
-	if schema == nil || schema.Properties == nil {
-		t.Fatal("SimFleet CRD schema is missing properties")
-	}
-	status, ok := schema.Properties["status"]
-	if !ok {
-		t.Fatal("SimFleet CRD schema is missing status")
-	}
+	Expect(schema).NotTo(BeNil(), "SimFleet CRD schema is missing properties")
+	Expect(schema.Properties).NotTo(BeNil(), "SimFleet CRD schema is missing properties")
+	Expect(schema.Properties).To(HaveKey("status"), "SimFleet CRD schema is missing status")
+	status := schema.Properties["status"]
 	return &status
 }
 
