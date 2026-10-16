@@ -11,18 +11,23 @@ runs inside the builder image described below, not on the host.
 
 `make check-host` (or `./check-host.sh`) builds that image and boots its
 appliance once, so a host that cannot build the disk says so in under a
-minute. CI runs it before every job that builds the image.
+minute. The e2e GitHub workflow runs it before `make test-e2e`.
 
 Apple Silicon and other non-Linux-amd64 hosts cannot build this image or run
 controller e2e tests that boot it. Use a Linux amd64 machine or the e2e
-GitHub workflow (`make test-e2e` fails early elsewhere).
+GitHub workflow (`make test-e2e` fails early elsewhere). That workflow runs on
+GitHub-hosted `ubuntu-latest` on every push to `main`, on manual dispatch, and
+on pull requests labelled `e2e`. Before building, it frees disk space, because
+the containerDisk, Kind, DPF, and KubeVirt do not fit in the runner's default
+free space. It also opens `/dev/kvm` to the runner user so KubeVirt can use
+hardware virtualization.
 
 ### Why libguestfs runs in a container
 
 libguestfs builds a supermin appliance from the host's own kernel, and Ubuntu
-ships `/boot/vmlinuz-*` readable only by root. CI runners often run as
-an unprivileged user that is in the `docker` group but not `kvm`, so a host
-libguestfs fails when supermin copies the kernel:
+ships `/boot/vmlinuz-*` readable only by root. The GitHub Actions runner user
+is in the `docker` group but is not root, so a host libguestfs fails when
+supermin copies the kernel:
 
 ```
 cp: cannot open '/boot/vmlinuz-7.0.0-31-generic' for reading: Permission denied
@@ -42,7 +47,11 @@ with `SIMFLEET_KVM=on|off`.
 
 ## Build and push
 
+Run these from this directory. The first command builds the mock-dpuagent
+binary the image bakes in (see [Mock DPU agent](#mock-dpu-agent-is-baked-but-not-configured)).
+
 ```sh
+make -C ../.. dpuagent-build
 make node-image-build
 make node-image-push NODE_IMG=registry.example.com/simfleet-node:v0.2.0
 ```
@@ -65,6 +74,12 @@ baked in. It reuses an existing image
 only when that hash matches, so any recipe change rebuilds and the mere
 existence of the fixed tag never counts as a cache hit. Print the current hash
 with `make node-image-source-hash`.
+
+The cache lives in the local Docker image store, so it only pays off on a
+host that keeps its images between runs, such as a workstation or a
+self-hosted runner. GitHub-hosted runners start every job with an empty store,
+and the e2e workflow prunes images to free disk, so CI always takes the build
+path.
 
 ## What the guest gets
 
@@ -134,15 +149,8 @@ declines to start it. `verify-guest.sh` asserts the vendor placement and the
 `test/consistency` ties that placement to the mask form
 the controller renders, because neither suite can see the other half.
 
-Build the mock binary before the image, or the build fails with the command to
-run:
-
-```sh
-make -C ../.. dpuagent-build
-make node-image-build
-```
-
-`dpuagent-build` invokes `hack/dpuagent/build.sh`, which checks out the commit
+Build the mock binary before the image, as in [Build and push](#build-and-push),
+or the build fails with the command to run. `dpuagent-build` invokes `hack/dpuagent/build.sh`, which checks out the commit
 in `hack/dpuagent/mock.ref` and writes `bin/mock-dpuagent`. That commit and
 the binary's digest are both part of the source hash, so a rebuilt mock never
 reuses a cached image. `mock.ref` is a commit of the public GitHub mirror, and
@@ -169,7 +177,9 @@ make test
 `qemu-img`, `virt-*`, and `guestfish` commands. The `docker` stand-in runs
 what a real `docker run` would, with the mounts translated back to host paths,
 so the disk stages are still exercised rather than merely requested. It needs
-nothing but bash and coreutils. The `v1.36.4` guest pin shared with CI and the
+nothing but bash and coreutils, so it also runs on macOS. The unit-test GitHub
+workflow runs it on every pull request through `make test-scripts` in the
+repository root. The `v1.36.4` guest pin shared with CI and the
 scale scenario is checked by `test/consistency`, which
 `make test` in the controller runs.
 

@@ -109,7 +109,8 @@ simfleet_build_builder_image() {
 
 # simfleet_kvm_args echoes the flags that give the builder container KVM.
 # The docker daemon runs as root, so it can hand over /dev/kvm even where the
-# calling user cannot open it, which is the case on the CI runners. Without
+# calling user cannot open it, as on a GitHub-hosted runner before the e2e
+# workflow relaxes the device's permissions. Without
 # the device libguestfs still works, under TCG, just slowly.
 simfleet_kvm_args() {
 	case "${SIMFLEET_KVM:-auto}" in

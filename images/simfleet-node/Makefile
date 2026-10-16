@@ -48,7 +48,7 @@ node-image-build:
 	$(BUILD_ENV) ./build.sh
 
 # Same image, but skipped when an existing one carries this recipe's source
-# hash. Used by CI on the persistent e2e runners.
+# hash. Pays off only where Docker images persist between runs.
 .PHONY: node-image-build-cached
 node-image-build-cached:
 	$(BUILD_ENV) ./build-cached.sh

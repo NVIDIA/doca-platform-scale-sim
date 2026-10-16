@@ -1,8 +1,8 @@
 # Build host for the simfleet-node containerDisk.
 #
 # The e2e runners cannot run libguestfs directly: Ubuntu ships /boot/vmlinuz-*
-# as root-only and the runner user is not in the kvm group, so supermin fails
-# copying the kernel into its appliance. The runner user is in the docker
+# as root-only and the runner user is not root, so supermin fails copying the
+# kernel into its appliance. The runner user is in the docker
 # group, so the recipe runs libguestfs in here instead, where it is root and
 # the kernel it needs is the one this image installs.
 FROM ubuntu:24.04

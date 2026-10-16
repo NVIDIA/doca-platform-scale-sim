@@ -19,8 +19,8 @@ set -euo pipefail
 # Customize quay.io/containerdisks/ubuntu into a KubeVirt containerDisk.
 #
 # The disk work runs inside the builder image from Dockerfile.builder, because
-# the CI hosts cannot run libguestfs directly: their kernels are root-only and
-# the runner user is not in the kvm group. Only docker is needed here.
+# the CI hosts cannot run libguestfs directly: their kernels are readable only
+# by root and the runner user is not root. Only docker is needed here.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
