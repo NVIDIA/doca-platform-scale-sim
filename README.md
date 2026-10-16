@@ -17,16 +17,22 @@ Requires Go 1.26.
 ```bash
 make test
 make lint
+make verify
 ```
 
-`make test` regenerates the CRDs, RBAC and deepcopy code, then runs the unit
-tests.
+`make test` runs the unit and envtest tests with the race detector.
+`make verify` checks that the generated CRDs, RBAC, deepcopy code, `go.mod` and
+chart README are up to date, that shell scripts are formatted with `shfmt`,
+that sources carry the copyright notice, and runs checkov against the rendered
+chart, which needs Docker. Run `make manifests generate` after changing the
+API, and `make fmt-shell` to format shell scripts.
 
 ## Install
 
 The controller runs on a DPF management cluster with KubeVirt installed.
 Build and push the image, then install the CRDs and controller with the Helm
-chart:
+chart. `REGISTRY` defaults to the placeholder `example.com`, so name the
+registry explicitly:
 
 ```bash
 make docker-build docker-push IMG=<registry>/simfleet-controller:<tag>
