@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package cloudinit
 
 import (
 	"errors"
@@ -32,8 +32,30 @@ import (
 	"sigs.k8s.io/yaml"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
+
+// The management kubeconfig shape dpuagent.ManagementKubeconfig must produce.
+const (
+	managementConfigName = "management"
+	managementServiceURL = "https://kubernetes.default.svc"
+)
+
+func fleetWith(agent *scalev1alpha1.DPUAgentSpec) *scalev1alpha1.SimFleet {
+	fleet := &scalev1alpha1.SimFleet{
+		ObjectMeta: metav1.ObjectMeta{Name: "scale-3000", Namespace: "test-ns"},
+		Spec: scalev1alpha1.SimFleetSpec{
+			Replicas:              1,
+			DevicesPerDPUNode:     1,
+			DeviceSelectionLabels: map[string]string{"pool": "scale-3000"},
+		},
+	}
+	if agent != nil {
+		fleet.Spec.DPUAgent = agent
+	}
+	return fleet
+}
 
 type cloudConfig struct {
 	Hostname   string           `json:"hostname"`
@@ -139,9 +161,9 @@ func validateForbiddenCloudInitContent(userdata string) error {
 			return errors.New("cloud-init writes a tenant admin kubeconfig")
 		}
 		switch file.Path {
-		case dpuAgentConfPath:
+		case dpuagent.ConfPath:
 			foundConf = true
-		case dpuAgentKubeconfigPath:
+		case dpuagent.KubeconfigPath:
 			if foundManagementKubeconfig {
 				return errors.New("cloud-init writes more than one management kubeconfig")
 			}
@@ -237,7 +259,7 @@ func assertCloudInitDebugUser(cfg cloudConfig) {
 }
 
 var _ = Describe("Cloud-init Secret", func() {
-	Describe("desiredCloudInitSecret", func() {
+	Describe("DesiredSecret", func() {
 		It("renders the identity, dpuagent configuration and management kubeconfig for an enabled guest", func() {
 			fleet := &scalev1alpha1.SimFleet{
 				ObjectMeta: metav1.ObjectMeta{Name: "scale-3000", Namespace: "fleet-ns", UID: "uid"},
@@ -250,12 +272,12 @@ var _ = Describe("Cloud-init Secret", func() {
 				},
 			}
 			const ordinal = 12
-			kubeconfig, err := managementKubeconfig(
+			kubeconfig, err := dpuagent.ManagementKubeconfig(
 				[]byte("test-management-token"),
 				[]byte("test-management-ca"),
 			)
 			Expect(err).NotTo(HaveOccurred())
-			secret, err := desiredCloudInitSecret(fleet, ordinal, kubeconfig)
+			secret, err := DesiredSecret(fleet, ordinal, kubeconfig)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secret.Type).To(Equal(corev1.SecretTypeOpaque))
 			Expect(secretDataKeys(secret.Data)).To(Equal([]string{"userdata"}))
@@ -283,23 +305,23 @@ var _ = Describe("Cloud-init Secret", func() {
 			}, "\n") + "\n"
 			Expect(identity.Content).To(Equal(wantIdentity))
 			conf := cfg.WriteFiles[1]
-			Expect(conf.Path).To(Equal(dpuAgentConfPath))
+			Expect(conf.Path).To(Equal(dpuagent.ConfPath))
 			Expect(conf.Permissions).To(Equal("0600"))
-			wantConf, err := renderMockDPUAgentConfig(fleet, utils.SerialNumber(fleet.Name, ordinal))
+			wantConf, err := dpuagent.RenderConfig(fleet, naming.SerialNumber(fleet.Name, ordinal))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(conf.Content).To(Equal(wantConf))
 			management := cfg.WriteFiles[2]
-			Expect(management.Path).To(Equal(dpuAgentKubeconfigPath))
+			Expect(management.Path).To(Equal(dpuagent.KubeconfigPath))
 			Expect(management.Permissions).To(Equal("0600"))
 			Expect(management.Content).To(Equal(string(kubeconfig)))
 			// Both units are baked into the image and enabled there; an enabled
 			// guest must neither run commands nor name a unit it does not own.
 			Expect(cfg.Runcmd).To(BeEmpty())
-			for _, unit := range []string{waitKubeletJoinUnit, mockDPUAgentUnit} {
+			for _, unit := range []string{dpuagent.WaitKubeletJoinUnit, dpuagent.MockDPUAgentUnit} {
 				Expect(ud).NotTo(ContainSubstring(unit), "enabled cloud-init userdata mentions %q", unit)
 			}
-			Expect(secret.Labels).To(HaveKeyWithValue(labelOrdinal, "000012"))
-			Expect(secret.Labels).To(HaveKeyWithValue(labelFleetUID, "uid"))
+			Expect(secret.Labels).To(HaveKeyWithValue(naming.LabelOrdinal, "000012"))
+			Expect(secret.Labels).To(HaveKeyWithValue(naming.LabelFleetUID, "uid"))
 			Expect(len(secret.Data["userdata"])).To(BeNumerically("<", maxCloudInitUserdataBytes))
 		})
 
@@ -307,9 +329,9 @@ var _ = Describe("Cloud-init Secret", func() {
 			_, err := cloudInitUserdata(nil, 0, []byte("kubeconfig"))
 			Expect(err).To(HaveOccurred(), "cloudInitUserdata accepted a nil SimFleet")
 			for _, kubeconfig := range [][]byte{nil, {}} {
-				secret, err := desiredCloudInitSecret(fleetWith(nil), 3, kubeconfig)
-				Expect(err).To(HaveOccurred(), "desiredCloudInitSecret accepted an empty management kubeconfig %#v", kubeconfig)
-				Expect(secret).To(BeNil(), "desiredCloudInitSecret accepted an empty management kubeconfig %#v", kubeconfig)
+				secret, err := DesiredSecret(fleetWith(nil), 3, kubeconfig)
+				Expect(err).To(HaveOccurred(), "DesiredSecret accepted an empty management kubeconfig %#v", kubeconfig)
+				Expect(secret).To(BeNil(), "DesiredSecret accepted an empty management kubeconfig %#v", kubeconfig)
 				Expect(err.Error()).To(And(ContainSubstring("ordinal 3"), ContainSubstring("empty")),
 					"error does not name the empty kubeconfig and ordinal")
 			}
@@ -319,7 +341,7 @@ var _ = Describe("Cloud-init Secret", func() {
 			disabled := false
 			fleet := fleetWith(&scalev1alpha1.DPUAgentSpec{Enabled: &disabled})
 			fleet.UID = "fleet-uid"
-			secret, err := desiredCloudInitSecret(fleet, 0, nil)
+			secret, err := DesiredSecret(fleet, 0, nil)
 			Expect(err).NotTo(HaveOccurred())
 			userdata := string(secret.Data["userdata"])
 			assertForbiddenCloudInitContent(userdata)
@@ -331,7 +353,7 @@ var _ = Describe("Cloud-init Secret", func() {
 			Expect(cfg.WriteFiles[0].Path).To(Equal(dpuIdentityPath))
 			// Without a credential the join helper would fail on a loop, so both
 			// baked units must be masked, and persistently so (see cloudInitUserdata).
-			for _, unit := range []string{mockDPUAgentUnit, waitKubeletJoinUnit} {
+			for _, unit := range []string{dpuagent.MockDPUAgentUnit, dpuagent.WaitKubeletJoinUnit} {
 				Expect(cfg.Runcmd).To(ContainElement("systemctl mask --now "+unit),
 					"disabled runcmd does not persistently mask %s", unit)
 			}
@@ -343,9 +365,9 @@ var _ = Describe("Cloud-init Secret", func() {
 		It("rejects oversized userdata without leaking credentials", func() {
 			const credentialMarker = "do-not-leak-management-credential"
 			kubeconfig := []byte(strings.Repeat(credentialMarker, maxCloudInitUserdataBytes))
-			secret, err := desiredCloudInitSecret(fleetWith(nil), 7, kubeconfig)
+			secret, err := DesiredSecret(fleetWith(nil), 7, kubeconfig)
 			Expect(err).To(HaveOccurred())
-			Expect(secret).To(BeNil(), "desiredCloudInitSecret returned a Secret for oversized userdata")
+			Expect(secret).To(BeNil(), "DesiredSecret returned a Secret for oversized userdata")
 			Expect(err.Error()).To(ContainSubstring("ordinal 7"), "error does not identify the ordinal")
 			Expect(strings.Contains(err.Error(), credentialMarker)).To(BeFalse(), "error leaked credential material")
 		})
@@ -353,16 +375,16 @@ var _ = Describe("Cloud-init Secret", func() {
 		It("embeds a management kubeconfig limited to the pinned Service, CA and bearer token", func() {
 			const testToken = "do-not-log-management-token"
 			testCA := []byte("test-management-ca")
-			kubeconfig, err := managementKubeconfig([]byte(testToken), testCA)
+			kubeconfig, err := dpuagent.ManagementKubeconfig([]byte(testToken), testCA)
 			Expect(err).NotTo(HaveOccurred())
-			secret, err := desiredCloudInitSecret(fleetWith(nil), 0, kubeconfig)
+			secret, err := DesiredSecret(fleetWith(nil), 0, kubeconfig)
 			Expect(err).NotTo(HaveOccurred())
 
 			var cloud cloudConfig
 			Expect(yaml.Unmarshal(secret.Data["userdata"], &cloud)).To(Succeed())
 			var embedded string
 			for _, file := range cloud.WriteFiles {
-				if file.Path == dpuAgentKubeconfigPath {
+				if file.Path == dpuagent.KubeconfigPath {
 					embedded = file.Content
 				}
 			}
@@ -428,12 +450,12 @@ var _ = Describe("Cloud-init Secret", func() {
 					},
 				},
 			}
-			kubeconfig, err := managementKubeconfig(
+			kubeconfig, err := dpuagent.ManagementKubeconfig(
 				[]byte(strings.Repeat("t", 1400)),
 				[]byte(strings.Repeat("c", 1900)),
 			)
 			Expect(err).NotTo(HaveOccurred())
-			secret, err := desiredCloudInitSecret(fleet, 2999, kubeconfig)
+			secret, err := DesiredSecret(fleet, 2999, kubeconfig)
 			Expect(err).NotTo(HaveOccurred())
 			userdata := string(secret.Data["userdata"])
 			Expect(strings.Count(userdata, "name: CertificateService.ReplaceCertificate")).To(Equal(len(overrides)),
@@ -457,9 +479,9 @@ var _ = Describe("Cloud-init Secret", func() {
 
 		makeUserdata := func(mutate func(*cloudConfig)) string {
 			GinkgoHelper()
-			kubeconfig, err := managementKubeconfig([]byte(testToken), []byte("test-ca"))
+			kubeconfig, err := dpuagent.ManagementKubeconfig([]byte(testToken), []byte("test-ca"))
 			Expect(err).NotTo(HaveOccurred())
-			secret, err := desiredCloudInitSecret(fleetWith(nil), 0, kubeconfig)
+			secret, err := DesiredSecret(fleetWith(nil), 0, kubeconfig)
 			Expect(err).NotTo(HaveOccurred())
 			var cloud cloudConfig
 			Expect(yaml.Unmarshal(secret.Data["userdata"], &cloud)).To(Succeed())
@@ -492,7 +514,7 @@ var _ = Describe("Cloud-init Secret", func() {
 			},
 			Entry("unmodified round trip", func(*cloudConfig) {}, ""),
 			Entry("foreign management server", func(cloud *cloudConfig) {
-				management := fileAt(cloud, dpuAgentKubeconfigPath)
+				management := fileAt(cloud, dpuagent.KubeconfigPath)
 				config, err := clientcmd.Load([]byte(management.Content))
 				Expect(err).NotTo(HaveOccurred())
 				config.Clusters[managementConfigName].Server = "https://tenant.example.test:6443"
@@ -501,13 +523,13 @@ var _ = Describe("Cloud-init Secret", func() {
 				management.Content = string(data)
 			}, "does not use the pinned management Service and CA"),
 			Entry("token kubeconfig outside management path", func(cloud *cloudConfig) {
-				copied := *fileAt(cloud, dpuAgentKubeconfigPath)
+				copied := *fileAt(cloud, dpuagent.KubeconfigPath)
 				copied.Path = "/etc/dpf-sim/tenant.kubeconfig"
 				cloud.WriteFiles = append(cloud.WriteFiles, copied)
 			}, "contains an unapproved kubeconfig"),
 			Entry("kubeconfig inside the dpuagent configuration", func(cloud *cloudConfig) {
-				management := fileAt(cloud, dpuAgentKubeconfigPath)
-				conf := fileAt(cloud, dpuAgentConfPath)
+				management := fileAt(cloud, dpuagent.KubeconfigPath)
+				conf := fileAt(cloud, dpuagent.ConfPath)
 				conf.Content += management.Content
 			}, "contains an unapproved kubeconfig"),
 		)

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package kubevirt
 
 import (
 	. "github.com/onsi/ginkgo/v2"
@@ -33,7 +33,7 @@ func bmcVMI(name string, interfaces ...virtv1.VirtualMachineInstanceNetworkInter
 var _ = Describe("BMC address selection", func() {
 	DescribeTable("selects the BMC address a VMI publishes",
 		func(vmi *virtv1.VirtualMachineInstance, want string) {
-			Expect(guestBridgedIPv4(vmi)).To(Equal(want))
+			Expect(GuestBridgedIPv4(vmi)).To(Equal(want))
 		},
 		Entry("no VMI", nil, ""),
 		Entry("no interfaces", bmcVMI("vm"), ""),
@@ -46,10 +46,12 @@ var _ = Describe("BMC address selection", func() {
 		Entry("the interface has not reported an address yet", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
 			Name: "default",
 		}), ""),
-		// KubeVirt reports the SLIRP gateway for a VMI whose guest agent
-		// has not answered. DPF would dial the pod's own gateway.
-		Entry("the masquerade gateway is never a BMC", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
+		// Masquerade guest addresses only exist inside the virt-launcher pod.
+		Entry("the default masquerade guest address is never a BMC", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
 			Name: "default", IP: "10.0.2.2",
+		}), ""),
+		Entry("any address in the masquerade network is never a BMC", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
+			Name: "default", IP: "10.0.2.57",
 		}), ""),
 		Entry("an IPv6 address is not a BMC address", bmcVMI("vm", virtv1.VirtualMachineInstanceNetworkInterface{
 			Name: "default", IP: "fd10::3",

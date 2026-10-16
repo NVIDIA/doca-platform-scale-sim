@@ -36,7 +36,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpf"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 func dpuRefs(names ...string) []provisioningv1.DPURef {
@@ -59,11 +60,11 @@ var _ = Describe("SimFleet rollout", func() {
 			Expect(instances).To(HaveKey(ordinal), "SimInstance for ordinal %d was not created", ordinal)
 		}
 		Expect(h.fleet().Status.AdmittedReplicas).To(Equal(admitBatch))
-		writes := h.callsWithPrefix("status ", "create ")
+		writes := h.callsOf(callStatus, callCreateInstance)
 		Expect(writes).NotTo(BeEmpty(), "calls = %v", h.calls)
-		Expect(writes[0]).To(Equal(fmt.Sprintf("status admitted=%d", admitBatch)),
+		Expect(writes[0]).To(Equal(call(callStatus, fmt.Sprintf("admitted=%d", admitBatch))),
 			"writes = %v, want the admittedReplicas status patch before any create", h.calls)
-		Expect(h.callsWithPrefix("create ")).To(HaveLen(admitBatch))
+		Expect(h.callsOf(callCreateInstance)).To(HaveLen(admitBatch))
 	})
 
 	It("reports an instance name held by another owner", func() {
@@ -91,12 +92,12 @@ var _ = Describe("SimFleet rollout", func() {
 		fleet := rolloutFleet(1, 1, 1)
 		earlier := fleetInstance(fleet, 0, scalev1alpha1.SimInstanceTerminating)
 		earlier.OwnerReferences[0].UID = "earlier-fleet-uid"
-		earlier.Finalizers = []string{simInstanceTeardownFinalizer}
+		earlier.Finalizers = []string{scalev1alpha1.SimInstanceFinalizer}
 		now := metav1.Now()
 		earlier.DeletionTimestamp = &now
 		h := newFleetHarness(fleet, earlier)
 		var logs []string
-		logger := funcr.New(func(prefix, args string) {
+		logger := funcr.New(func(_, args string) {
 			logs = append(logs, args)
 		}, funcr.Options{Verbosity: 1})
 
@@ -120,7 +121,7 @@ var _ = Describe("SimFleet rollout", func() {
 		h.reconcile()
 
 		Expect(h.instances()).To(HaveKey(1), "SimInstance for ordinal 1 was not recreated")
-		Expect(h.callsWithPrefix("create ")).To(Equal([]string{"create " + utils.InstanceName(fleet.Name, 1)}),
+		Expect(h.callsOf(callCreateInstance)).To(Equal([]string{call(callCreateInstance, naming.InstanceName(fleet.Name, 1))}),
 			"want only ordinal 1 created")
 	})
 
@@ -135,7 +136,7 @@ var _ = Describe("SimFleet rollout", func() {
 
 		h.reconcile()
 
-		Expect(h.callsWithPrefix("delete ")).To(Equal([]string{"delete " + failed.Name}),
+		Expect(h.callsOf(callDeleteInstance)).To(Equal([]string{call(callDeleteInstance, failed.Name)}),
 			"want only the Failed instance deleted")
 		err := h.client.Get(context.Background(), client.ObjectKeyFromObject(failed), &scalev1alpha1.SimInstance{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Get(Failed instance) error = %v, want NotFound", err)
@@ -154,7 +155,7 @@ var _ = Describe("SimFleet rollout", func() {
 		fleet := rolloutFleet(3, 1, 3)
 		failed := fleetInstance(fleet, 1, scalev1alpha1.SimInstanceFailed, scalev1alpha1.SimInstanceChildrenCreated)
 		failed.Status.FailureReason = "DPUDevice"
-		failed.Finalizers = []string{simInstanceTeardownFinalizer}
+		failed.Finalizers = []string{scalev1alpha1.SimInstanceFinalizer}
 		now := metav1.Now()
 		failed.DeletionTimestamp = &now
 		h := newFleetHarness(fleet, append(
@@ -165,7 +166,7 @@ var _ = Describe("SimFleet rollout", func() {
 
 		h.reconcile()
 
-		Expect(h.callsWithPrefix("delete ", "create ")).To(BeEmpty(), "want no SimInstance writes while ordinal 1 tears down")
+		Expect(h.callsOf(callDeleteInstance, callCreateInstance)).To(BeEmpty(), "want no SimInstance writes while ordinal 1 tears down")
 	})
 
 	It("scales down", func() {
@@ -182,7 +183,7 @@ var _ = Describe("SimFleet rollout", func() {
 		for ordinal := range 50 {
 			Expect(instances).To(HaveKey(ordinal), "SimInstance for ordinal %d was deleted", ordinal)
 		}
-		Expect(h.callsWithPrefix("delete ")).To(HaveLen(100))
+		Expect(h.callsOf(callDeleteInstance)).To(HaveLen(100))
 		Expect(h.fleet().Status.AdmittedReplicas).To(Equal(50))
 	})
 
@@ -219,7 +220,7 @@ var _ = Describe("SimFleet rollout", func() {
 		It("adds a missing device to an existing DPUNode", func() {
 			fleet := rolloutFleet(2, 2, 2)
 			node := ownedHostNode(fleet, 0)
-			node.Spec.DPUs = dpuRefs(utils.DeviceName(fleet.Name, 0), "added-by-dpf")
+			node.Spec.DPUs = dpuRefs(naming.DeviceName(fleet.Name, 0), "added-by-dpf")
 			h := newFleetHarness(fleet, append(
 				fleetInstances(fleet, 0, 2, scalev1alpha1.SimInstanceDeviceCreated, scalev1alpha1.SimInstanceChildrenCreated),
 				node,
@@ -230,17 +231,17 @@ var _ = Describe("SimFleet rollout", func() {
 			current := &provisioningv1.DPUNode{}
 			Expect(h.client.Get(context.Background(), client.ObjectKeyFromObject(node), current)).To(Succeed())
 			Expect(current.Spec.DPUs).To(Equal(
-				dpuRefs(utils.DeviceName(fleet.Name, 0), "added-by-dpf", utils.DeviceName(fleet.Name, 1))))
-			Expect(h.callsWithPrefix("patch dpunode ")).To(HaveLen(1))
+				dpuRefs(naming.DeviceName(fleet.Name, 0), "added-by-dpf", naming.DeviceName(fleet.Name, 1))))
+			Expect(h.callsOf(callPatchNode)).To(HaveLen(1))
 
 			h.calls = nil
 			h.reconcile()
-			Expect(h.callsWithPrefix("patch dpunode ")).To(BeEmpty(), "want no DPUNode patch once it lists every device")
+			Expect(h.callsOf(callPatchNode)).To(BeEmpty(), "want no DPUNode patch once it lists every device")
 		})
 
 		It("refuses a DPUNode without a controller", func() {
 			fleet := rolloutFleet(2, 2, 2)
-			orphan := desiredHostNode(fleet, 0, fleet.Spec.Replicas)
+			orphan := dpf.DesiredHostNode(fleet, 0, fleet.Spec.Replicas)
 			orphan.Spec.DPUs = nil
 			h := newFleetHarness(fleet, append(
 				fleetInstances(fleet, 0, 2, scalev1alpha1.SimInstanceDeviceCreated, scalev1alpha1.SimInstanceChildrenCreated),
@@ -250,7 +251,7 @@ var _ = Describe("SimFleet rollout", func() {
 			_, err := h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: h.key})
 
 			Expect(err).To(MatchError(ContainSubstring("missing owner reference")))
-			Expect(h.callsWithPrefix("patch dpunode ", "new dpunode ")).To(BeEmpty())
+			Expect(h.callsOf(nodeCalls...)).To(BeEmpty(), "want no DPUNode writes")
 		})
 
 		// A host whose devices are not all created keeps the DPUNode it already has:
@@ -266,7 +267,7 @@ var _ = Describe("SimFleet rollout", func() {
 			h.reconcile()
 
 			Expect(h.fleet().Status.DPUNodes).To(Equal(1))
-			Expect(h.callsWithPrefix("patch dpunode ", "new dpunode ", "drop dpunode ")).To(BeEmpty())
+			Expect(h.callsOf(nodeCalls...)).To(BeEmpty(), "want no DPUNode writes")
 		})
 	})
 
@@ -326,11 +327,11 @@ var _ = Describe("SimFleet rollout", func() {
 			fleet := rolloutFleet(250, 10, 0)
 			instance := desiredInstance(fleet, 42)
 
-			Expect(instance.Name).To(Equal(utils.InstanceName(fleet.Name, 42)))
+			Expect(instance.Name).To(Equal(naming.InstanceName(fleet.Name, 42)))
 			Expect(instance.Namespace).To(Equal(fleet.Namespace))
-			Expect(instance.Labels).To(HaveKeyWithValue(labelFleetName, fleet.Name))
-			Expect(instance.Labels).To(HaveKeyWithValue(labelFleetUID, string(fleet.UID)))
-			Expect(instance.Labels).To(HaveKeyWithValue(labelOrdinal, "000042"))
+			Expect(instance.Labels).To(HaveKeyWithValue(naming.LabelFleetName, fleet.Name))
+			Expect(instance.Labels).To(HaveKeyWithValue(naming.LabelFleetUID, string(fleet.UID)))
+			Expect(instance.Labels).To(HaveKeyWithValue(naming.LabelOrdinal, "000042"))
 			Expect(instance.Spec.Ordinal).To(Equal(42))
 			Expect(instance.Spec.HostIndex).To(Equal(4))
 			owner := metav1.GetControllerOf(instance)
@@ -354,53 +355,6 @@ var _ = Describe("SimFleet rollout", func() {
 			Expect(apierrors.IsConflict(err)).To(BeTrue(), "persistAdmitted() error = %v, want a conflict", err)
 			Expect(h.fleet().Status.AdmittedReplicas).To(Equal(300))
 		})
-	})
-
-	Describe("desiredHostNode", func() {
-		It("uses the DPUNode template", func() {
-			fleet := rolloutFleet(4, 2, 4)
-
-			method := desiredHostNode(fleet, 0, 4).Spec.NodeRebootMethod
-			Expect(method).NotTo(BeNil(), "want External without a template")
-			Expect(method.External).NotTo(BeNil(), "nodeRebootMethod = %+v, want External without a template", method)
-
-			fleet.Spec.DPUNodeTemplate = &scalev1alpha1.DPUNodeTemplate{
-				Metadata: scalev1alpha1.TemplateMetadata{Labels: map[string]string{
-					"team":       "scale",
-					labelOrdinal: "9999",
-				}},
-				Spec: scalev1alpha1.DPUNodeTemplateSpec{
-					NodeRebootMethod: &provisioningv1.NodeRebootMethod{HostAgent: &provisioningv1.HostAgent{}},
-				},
-			}
-			node := desiredHostNode(fleet, 1, 4)
-
-			Expect(node.Labels).To(HaveKeyWithValue("team", "scale"), "want the template label")
-			Expect(node.Labels).To(HaveKeyWithValue(labelOrdinal, "0001"), "want the host index over the template")
-			method = node.Spec.NodeRebootMethod
-			Expect(method).NotTo(BeNil(), "want the template's HostAgent")
-			Expect(method.HostAgent).NotTo(BeNil(), "nodeRebootMethod = %+v, want the template's HostAgent", method)
-			Expect(method.External).To(BeNil(), "nodeRebootMethod = %+v, want the template's HostAgent", method)
-			Expect(method).NotTo(BeIdenticalTo(fleet.Spec.DPUNodeTemplate.Spec.NodeRebootMethod),
-				"nodeRebootMethod aliases the fleet template")
-		})
-	})
-
-	// A node missing any desired ref has to be one the patch path can bring back
-	// into line, without dropping a ref someone else added.
-	Describe("appendMissingDPUs", func() {
-		DescribeTable("brings a node's refs into line without dropping any",
-			func(existing, desired, want []provisioningv1.DPURef) {
-				Expect(appendMissingDPUs(existing, desired)).To(Equal(want))
-			},
-			Entry("appends every missing ref to an empty node", nil, dpuRefs("d0", "d1"), dpuRefs("d0", "d1")),
-			Entry("leaves a node that already lists every desired ref",
-				dpuRefs("d0", "d1"), dpuRefs("d0", "d1"), dpuRefs("d0", "d1")),
-			Entry("keeps refs the fleet no longer desires",
-				dpuRefs("d0", "stale"), dpuRefs("d0", "d1"), dpuRefs("d0", "stale", "d1")),
-			Entry("restores a ref replaced by an equal number of foreign refs",
-				dpuRefs("foreign"), dpuRefs("d0"), dpuRefs("foreign", "d0")),
-		)
 	})
 
 	// A Create that returns AlreadyExists while the cache has not caught up leaves
@@ -432,7 +386,7 @@ var _ = Describe("SimFleet rollout", func() {
 			}
 
 			ready, err := reconciler.ensureNode(context.Background(), fleet,
-				desiredHostNode(fleet, 0, fleet.Spec.Replicas), true)
+				dpf.DesiredHostNode(fleet, 0, fleet.Spec.Replicas), true)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})

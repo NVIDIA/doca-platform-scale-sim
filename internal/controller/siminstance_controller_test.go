@@ -43,7 +43,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/cloudinit"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpf"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/ownership"
 )
 
 const instanceOrdinal = 12
@@ -125,14 +130,14 @@ func (h *instanceHarness) current() *scalev1alpha1.SimInstance {
 func (h *instanceHarness) device() *provisioningv1.DPUDevice {
 	GinkgoHelper()
 	device := &provisioningv1.DPUDevice{}
-	Expect(h.get(utils.DeviceName(h.fleet.Name, instanceOrdinal), device)).To(BeTrue(), "DPUDevice was not created")
+	Expect(h.get(naming.DeviceName(h.fleet.Name, instanceOrdinal), device)).To(BeTrue(), "DPUDevice was not created")
 	return device
 }
 
 func (h *instanceHarness) virtualMachine() *virtv1.VirtualMachine {
 	GinkgoHelper()
 	vm := &virtv1.VirtualMachine{}
-	Expect(h.get(utils.VirtualMachineName(h.fleet.Name, instanceOrdinal), vm)).To(BeTrue(), "VirtualMachine was not created")
+	Expect(h.get(naming.VirtualMachineName(h.fleet.Name, instanceOrdinal), vm)).To(BeTrue(), "VirtualMachine was not created")
 	return vm
 }
 
@@ -203,7 +208,7 @@ func (h *instanceHarness) countWrites(includeInstance bool) *int {
 // manager cannot convert a VMI's status.
 func seededGuest(fleet *scalev1alpha1.SimFleet, address string) (*virtv1.VirtualMachine, *virtv1.VirtualMachineInstance) {
 	instance := newInstanceFixture(fleet, instanceOrdinal)
-	vm := desiredVirtualMachine(fleet, instanceOrdinal)
+	vm := kubevirt.DesiredVirtualMachine(fleet, instanceOrdinal)
 	vm.UID = types.UID(recordedUIDs.VirtualMachine)
 	vm.OwnerReferences = []metav1.OwnerReference{{
 		APIVersion: scalev1alpha1.GroupVersion.String(),
@@ -218,7 +223,7 @@ func seededGuest(fleet *scalev1alpha1.SimFleet, address string) (*virtv1.Virtual
 			Name:      vm.Name,
 			Namespace: vm.Namespace,
 			UID:       types.UID(recordedUIDs.VirtualMachineInstance),
-			Labels:    virtualMachineLabels(fleet, instanceOrdinal),
+			Labels:    vm.Spec.Template.ObjectMeta.Labels,
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: virtv1.GroupVersion.String(),
 				Kind:       "VirtualMachine",
@@ -229,7 +234,7 @@ func seededGuest(fleet *scalev1alpha1.SimFleet, address string) (*virtv1.Virtual
 		},
 		Status: virtv1.VirtualMachineInstanceStatus{
 			Interfaces: []virtv1.VirtualMachineInstanceNetworkInterface{{
-				Name: bridgedNetworkName,
+				Name: kubevirt.BridgedNetworkName,
 				IP:   address,
 			}},
 			Conditions: []virtv1.VirtualMachineInstanceCondition{{
@@ -246,7 +251,7 @@ func (h *instanceHarness) createDPU(name string, kubelet bool) *provisioningv1.D
 	dpu := &provisioningv1.DPU{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: h.fleet.Namespace},
 		Spec: provisioningv1.DPUSpec{
-			DPUDeviceName: utils.DeviceName(h.fleet.Name, instanceOrdinal),
+			DPUDeviceName: naming.DeviceName(h.fleet.Name, instanceOrdinal),
 		},
 	}
 	if kubelet {
@@ -262,7 +267,7 @@ func (h *instanceHarness) createDPU(name string, kubelet bool) *provisioningv1.D
 }
 
 func controlledByInstance(obj client.Object, instance *scalev1alpha1.SimInstance) bool {
-	return controlledBy(obj, scalev1alpha1.GroupVersion.String(), "SimInstance", instance.Name, instance.UID)
+	return ownership.ControlledBy(obj, scalev1alpha1.GroupVersion.String(), "SimInstance", instance.Name, instance.UID)
 }
 
 func requireCondition(instance *scalev1alpha1.SimInstance, conditionType string, status metav1.ConditionStatus, reason string) {
@@ -296,7 +301,7 @@ func cacheWithout(c client.Client, hidden func(client.Object) bool) client.Clien
 
 // labelScoped is what ManagerCacheOptions leaves out of the cache.
 func labelScoped(obj client.Object) bool {
-	_, labelled := obj.GetLabels()[labelFleetName]
+	_, labelled := obj.GetLabels()[naming.LabelFleetName]
 	return labelScopedCacheKind(obj) && !labelled
 }
 
@@ -333,25 +338,25 @@ func newReadyChildren(fleet *scalev1alpha1.SimFleet) *readyChildren {
 		Controller:         ptr.To(true),
 		BlockOwnerDeletion: ptr.To(true),
 	}}
-	serviceAccount := desiredDPUAgentServiceAccount(fleet, instanceOrdinal)
+	serviceAccount := dpuagent.DesiredServiceAccount(fleet, instanceOrdinal)
 	serviceAccount.OwnerReferences = owned
-	role := desiredDPUAgentRole(fleet, instanceOrdinal)
+	role := dpuagent.DesiredRole(fleet, instanceOrdinal)
 	role.OwnerReferences = owned
-	roleBinding := desiredDPUAgentRoleBinding(fleet, instanceOrdinal)
+	roleBinding := dpuagent.DesiredRoleBinding(fleet, instanceOrdinal)
 	roleBinding.OwnerReferences = owned
 	cloudInit := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name:            utils.CloudInitSecretName(fleet.Name, instanceOrdinal),
+		Name:            naming.CloudInitSecretName(fleet.Name, instanceOrdinal),
 		Namespace:       fleet.Namespace,
-		Labels:          cloudInitSecretLabels(fleet, instanceOrdinal),
+		Labels:          cloudinit.SecretLabels(fleet, instanceOrdinal),
 		OwnerReferences: owned,
 	}}
-	device := desiredDevice(fleet, instanceOrdinal)
+	device := dpf.DesiredDevice(fleet, instanceOrdinal)
 	device.UID = types.UID(recordedUIDs.DPUDevice)
 	device.OwnerReferences = owned
 	device.Spec.BMCIP = ptr.To("10.244.0.17")
-	mergeLabels(device, deviceSelectionLabels(fleet))
+	mergeLabels(device, dpf.DeviceSelectionLabels(fleet))
 	vm, vmi := seededGuest(fleet, "10.244.0.17")
-	dpuName := utils.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, instanceOrdinal)
+	dpuName := naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, instanceOrdinal)
 	return &readyChildren{
 		serviceAccount: serviceAccount,
 		role:           role,
@@ -369,7 +374,7 @@ func newReadyChildren(fleet *scalev1alpha1.SimFleet) *readyChildren {
 			Spec: provisioningv1.DPUSpec{DPUDeviceName: device.Name},
 		},
 		joinSecret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.KubeadmJoinSecretName(dpuName),
+			Name:      naming.KubeadmJoinSecretName(dpuName),
 			Namespace: fleet.Namespace,
 		}},
 	}
@@ -413,8 +418,8 @@ func newReadyInstanceHarness(fleet *scalev1alpha1.SimFleet, children *readyChild
 	th.reconciler.Recorder = th.recorder
 
 	instance := th.current()
-	controllerutil.AddFinalizer(instance, simInstanceTeardownFinalizer)
-	instance.Labels = map[string]string{labelFleetName: fleet.Name}
+	controllerutil.AddFinalizer(instance, scalev1alpha1.SimInstanceFinalizer)
+	instance.Labels = map[string]string{naming.LabelFleetName: fleet.Name}
 	th.update(instance)
 	instance.Status.Phase = scalev1alpha1.SimInstanceReady
 	instance.Status.ObservedUIDs = recordedUIDs
@@ -496,7 +501,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 				if err := c.Get(ctx, client.ObjectKeyFromObject(h.instance), instance); err != nil {
 					return err
 				}
-				if !controllerutil.ContainsFinalizer(instance, simInstanceTeardownFinalizer) {
+				if !controllerutil.ContainsFinalizer(instance, scalev1alpha1.SimInstanceFinalizer) {
 					childSeenWithoutFinalizer = true
 				}
 				return c.Create(ctx, obj, opts...)
@@ -507,12 +512,12 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 
 		Expect(creates).NotTo(BeZero(), "Reconcile created no child, so the finalizer ordering was not exercised")
 		Expect(childSeenWithoutFinalizer).To(BeFalse(), "a child was created before the teardown finalizer was persisted")
-		Expect(h.current().Finalizers).To(ContainElement(simInstanceTeardownFinalizer))
+		Expect(h.current().Finalizers).To(ContainElement(scalev1alpha1.SimInstanceFinalizer))
 	})
 
 	It("an instance of a deleting fleet converges nothing", func() {
 		fleet := instanceFleet()
-		fleet.Finalizers = []string{simFleetTeardownFinalizer}
+		fleet.Finalizers = []string{scalev1alpha1.SimFleetFinalizer}
 		now := metav1.Now()
 		fleet.DeletionTimestamp = &now
 		h := newInstanceHarness(fleet)
@@ -527,14 +532,14 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 		h := newInstanceHarness(instanceFleet())
 		h.reconcile()
 
-		name := dpuAgentCredentialName(h.fleet, instanceOrdinal)
+		name := dpuagent.CredentialName(h.fleet, instanceOrdinal)
 		for _, obj := range []client.Object{&corev1.ServiceAccount{}, &rbacv1.Role{}, &rbacv1.RoleBinding{}} {
 			Expect(h.get(name, obj)).To(BeTrue(), "%T %q was not created", obj, name)
 			Expect(controlledByInstance(obj, h.instance)).To(BeTrue(),
 				"%T owner = %+v, want SimInstance %s", obj, obj.GetOwnerReferences(), h.instance.Name)
 		}
 		secret := &corev1.Secret{}
-		Expect(h.get(utils.CloudInitSecretName(h.fleet.Name, instanceOrdinal), secret)).To(BeTrue(),
+		Expect(h.get(naming.CloudInitSecretName(h.fleet.Name, instanceOrdinal), secret)).To(BeTrue(),
 			"cloud-init Secret was not created")
 		Expect(controlledByInstance(secret, h.instance)).To(BeTrue(),
 			"Secret owner = %+v, want the SimInstance", secret.OwnerReferences)
@@ -552,19 +557,19 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 		device := h.device()
 		Expect(controlledByInstance(device, h.instance)).To(BeTrue(),
 			"DPUDevice owner = %+v, want the SimInstance", device.OwnerReferences)
-		for key, want := range deviceLabels(h.fleet, instanceOrdinal) {
+		for key, want := range dpf.DeviceLabels(h.fleet, instanceOrdinal) {
 			Expect(device.Labels).To(HaveKeyWithValue(key, want), "DPUDevice label %s", key)
 		}
 		requireCondition(h.current(), scalev1alpha1.SimInstanceDeviceCreated, metav1.ConditionTrue, "")
 
 		device.Spec.SerialNumber = "rewritten-by-dpf"
-		delete(device.Labels, labelOrdinal)
+		delete(device.Labels, naming.LabelOrdinal)
 		h.update(device)
 		h.reconcile()
 
 		device = h.device()
 		Expect(device.Spec.SerialNumber).To(Equal("rewritten-by-dpf"), "the reconciler rewrote DPUDevice spec")
-		Expect(device.Labels).To(HaveKeyWithValue(labelOrdinal, "000012"), "DPUDevice ordinal label not restored")
+		Expect(device.Labels).To(HaveKeyWithValue(naming.LabelOrdinal, "000012"), "DPUDevice ordinal label not restored")
 	})
 
 	It("VirtualMachine is created only after the cloud-init Secret exists", func() {
@@ -574,7 +579,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 			NamespacedName: client.ObjectKeyFromObject(h.instance),
 		})
 		Expect(err).To(HaveOccurred(), "Reconcile() error = nil, want the token failure")
-		vmName := utils.VirtualMachineName(h.fleet.Name, instanceOrdinal)
+		vmName := naming.VirtualMachineName(h.fleet.Name, instanceOrdinal)
 		Expect(h.get(vmName, &virtv1.VirtualMachine{})).To(BeFalse(), "VirtualMachine exists without its cloud-init Secret")
 		requireCondition(h.current(), scalev1alpha1.SimInstanceCredentialsReady, metav1.ConditionFalse, "")
 
@@ -610,7 +615,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 
 	It("a DPU with kubelet configured is provisioned", func() {
 		h := newInstanceHarness(instanceFleet())
-		dpuName := dpuAgentCredentialName(h.fleet, instanceOrdinal)
+		dpuName := dpuagent.CredentialName(h.fleet, instanceOrdinal)
 		h.createDPU(dpuName, true)
 
 		h.reconcile()
@@ -665,7 +670,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 	It("all conditions true records every child UID and reaches Ready", func() {
 		vm, vmi := seededGuest(instanceFleet(), "10.244.0.17")
 		h := newInstanceHarness(instanceFleet(), vm, vmi)
-		dpu := h.createDPU(dpuAgentCredentialName(h.fleet, instanceOrdinal), true)
+		dpu := h.createDPU(dpuagent.CredentialName(h.fleet, instanceOrdinal), true)
 
 		h.reconcile()
 
@@ -688,7 +693,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 		fleet := instanceFleet()
 		fleet.Spec.VirtualMachineTemplate = nil
 		h := newInstanceHarness(fleet)
-		dpu := h.createDPU(dpuAgentCredentialName(fleet, instanceOrdinal), true)
+		dpu := h.createDPU(dpuagent.CredentialName(fleet, instanceOrdinal), true)
 
 		h.reconcile()
 
@@ -698,14 +703,14 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 		requireCondition(instance, scalev1alpha1.SimInstanceCredentialsReady, metav1.ConditionTrue, "NotRequired")
 		want := scalev1alpha1.ObservedUIDs{DPU: string(dpu.UID), DPUDevice: string(h.device().UID)}
 		Expect(instance.Status.ObservedUIDs).To(Equal(want))
-		Expect(h.get(dpuAgentCredentialName(fleet, instanceOrdinal), &corev1.ServiceAccount{})).To(BeFalse(),
+		Expect(h.get(dpuagent.CredentialName(fleet, instanceOrdinal), &corev1.ServiceAccount{})).To(BeFalse(),
 			"ServiceAccount created for a fleet that boots no guest")
 		Expect(h.issuer.n).To(BeZero(), "token issued for a fleet that boots no guest")
 	})
 
 	It("a DPUDevice controlled by another owner fails the instance and is left alone", func() {
 		fleet := instanceFleet()
-		foreign := desiredDevice(fleet, instanceOrdinal)
+		foreign := dpf.DesiredDevice(fleet, instanceOrdinal)
 		foreign.Labels = map[string]string{"owner": "someone-else"}
 		foreign.OwnerReferences = foreignOwner()
 		h := newInstanceHarness(fleet, foreign)
@@ -720,7 +725,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 		Expect(after.ResourceVersion).To(Equal(before.ResourceVersion), "foreign DPUDevice was modified")
 		Expect(after.Labels).To(Equal(before.Labels), "foreign DPUDevice was modified")
 		Expect(after.OwnerReferences).To(Equal(before.OwnerReferences), "foreign DPUDevice was modified")
-		Expect(h.get(utils.VirtualMachineName(fleet.Name, instanceOrdinal), &virtv1.VirtualMachine{})).To(BeFalse(),
+		Expect(h.get(naming.VirtualMachineName(fleet.Name, instanceOrdinal), &virtv1.VirtualMachine{})).To(BeFalse(),
 			"converge continued past the ownership conflict")
 	})
 
@@ -730,9 +735,9 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 
 		h.reconcile()
 
-		Expect(h.get(utils.DeviceName(h.fleet.Name, instanceOrdinal), &provisioningv1.DPUDevice{})).To(BeFalse(),
+		Expect(h.get(naming.DeviceName(h.fleet.Name, instanceOrdinal), &provisioningv1.DPUDevice{})).To(BeFalse(),
 			"DPUDevice created without an owning fleet")
-		Expect(h.get(dpuAgentCredentialName(h.fleet, instanceOrdinal), &corev1.ServiceAccount{})).To(BeFalse(),
+		Expect(h.get(dpuagent.CredentialName(h.fleet, instanceOrdinal), &corev1.ServiceAccount{})).To(BeFalse(),
 			"ServiceAccount created without an owning fleet")
 		Expect(h.current().Finalizers).To(BeEmpty(), "finalizers without a fleet")
 	})
@@ -773,7 +778,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 				Expect(h.issuer.n).To(BeZero(), "token issued for an existing cloud-init Secret")
 				secret := &corev1.Secret{}
 				Expect(h.get(children.cloudInit.Name, secret)).To(BeTrue(), "cloud-init Secret is gone")
-				for key, want := range cloudInitSecretLabels(fleet, instanceOrdinal) {
+				for key, want := range cloudinit.SecretLabels(fleet, instanceOrdinal) {
 					Expect(secret.Labels).To(HaveKeyWithValue(key, want), "Secret label %s not restored", key)
 				}
 			})
@@ -790,7 +795,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 
 				account := &corev1.ServiceAccount{}
 				Expect(h.get(children.serviceAccount.Name, account)).To(BeTrue(), "ServiceAccount is gone")
-				for key, want := range dpuAgentCredentialLabels(fleet, instanceOrdinal) {
+				for key, want := range dpuagent.DesiredServiceAccount(fleet, instanceOrdinal).Labels {
 					Expect(account.Labels).To(HaveKeyWithValue(key, want), "ServiceAccount label %s not restored", key)
 				}
 				requireCondition(h.current(), scalev1alpha1.SimInstanceCredentialsReady, metav1.ConditionTrue, "Ready")
@@ -941,7 +946,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 							return err
 						}
 						quarantinedFirst = true
-						for key := range deviceSelectionLabels(fleet) {
+						for key := range dpf.DeviceSelectionLabels(fleet) {
 							if _, ok := device.Labels[key]; ok {
 								quarantinedFirst = false
 							}
@@ -1151,7 +1156,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 
 		It("a deleting fleet still names the selection labels quarantine strips", func() {
 			fleet := instanceFleet()
-			fleet.Finalizers = []string{simFleetTeardownFinalizer}
+			fleet.Finalizers = []string{scalev1alpha1.SimFleetFinalizer}
 			now := metav1.Now()
 			fleet.DeletionTimestamp = &now
 			children := newReadyChildren(fleet)
@@ -1178,7 +1183,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 			th.runTeardown()
 
 			Expect(dpuDeleted).To(BeTrue(), "DPU was not deleted")
-			for key := range deviceSelectionLabels(fleet) {
+			for key := range dpf.DeviceSelectionLabels(fleet) {
 				Expect(labelsAtDPUDelete).NotTo(HaveKey(key), "DPUDevice labels at DPU delete should have %s stripped", key)
 			}
 		})
@@ -1246,7 +1251,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 			Expect(instance.Status.Phase).To(Equal(scalev1alpha1.SimInstanceTerminating))
 			Expect(instance.Status.TeardownStartedAt).NotTo(BeNil(), "status.teardownStartedAt is not set")
 			requireCondition(instance, scalev1alpha1.SimInstanceTeardown, metav1.ConditionTrue, teardownDeleteDPU)
-			Expect(instance.Finalizers).To(ContainElement(simInstanceTeardownFinalizer), "finalizer removed after a failed step")
+			Expect(instance.Finalizers).To(ContainElement(scalev1alpha1.SimInstanceFinalizer), "finalizer removed after a failed step")
 		})
 
 		It("children controlled by another owner are left untouched", func() {
@@ -1296,7 +1301,7 @@ var _ = Describe("SimInstance helpers", func() {
 			fleet := instanceFleet()
 			labelled := func(ordinal int) *scalev1alpha1.SimInstance {
 				instance := newInstanceFixture(fleet, ordinal)
-				instance.Labels = map[string]string{labelFleetName: fleet.Name}
+				instance.Labels = map[string]string{naming.LabelFleetName: fleet.Name}
 				return instance
 			}
 			owned := labelled(0)
@@ -1333,5 +1338,60 @@ var _ = Describe("SimInstance helpers", func() {
 			})
 			Expect(kubeletConfigured(dpu)).To(BeTrue(), "kubeletConfigured() for true condition")
 		})
+	})
+})
+
+var _ = Describe("stripFinalizersAndForceDelete", func() {
+	var instance *scalev1alpha1.SimInstance
+
+	finalizedSecret := func() *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:       "child",
+			Namespace:  "fleet-ns",
+			Finalizers: []string{"x/y"},
+		}}
+	}
+
+	BeforeEach(func() {
+		instance = &scalev1alpha1.SimInstance{ObjectMeta: metav1.ObjectMeta{Name: "scale-3000-000000", Namespace: "fleet-ns"}}
+	})
+
+	It("removes the object and records an Event", func(ctx SpecContext) {
+		secret := finalizedSecret()
+		c := fake.NewClientBuilder().WithScheme(instanceTestScheme()).WithObjects(secret).Build()
+		recorder := events.NewFakeRecorder(10)
+
+		Expect(stripFinalizersAndForceDelete(
+			ctx, c, recorder, instance, secret.DeepCopy(), "Secret", 0, lifecycleForceTimeout+time.Second,
+		)).To(Succeed())
+		err := c.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Secret GET error = %v, want NotFound", err)
+		want := fmt.Sprintf(
+			"Warning LifecycleForceDelete stripped finalizers from Secret %s ordinal %d after %s",
+			secret.Name, 0, lifecycleForceTimeout,
+		)
+		Expect(recorder.Events).To(Receive(Equal(want)))
+		Expect(recorder.Events).NotTo(Receive(), "unexpected second Event")
+	})
+
+	It("tolerates an already-gone object", func(ctx SpecContext) {
+		c := fake.NewClientBuilder().WithScheme(instanceTestScheme()).Build()
+		recorder := events.NewFakeRecorder(10)
+
+		Expect(stripFinalizersAndForceDelete(
+			ctx, c, recorder, instance, finalizedSecret(), "Secret", 0, lifecycleForceTimeout,
+		)).To(Succeed())
+		Expect(recorder.Events).NotTo(Receive(), "unexpected Event for an already-gone object")
+	})
+
+	It("works without a recorder", func(ctx SpecContext) {
+		secret := finalizedSecret()
+		c := fake.NewClientBuilder().WithScheme(instanceTestScheme()).WithObjects(secret).Build()
+
+		Expect(stripFinalizersAndForceDelete(
+			ctx, c, nil, instance, secret.DeepCopy(), "Secret", 0, lifecycleForceTimeout,
+		)).To(Succeed())
+		err := c.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Secret GET error = %v, want NotFound", err)
 	})
 })

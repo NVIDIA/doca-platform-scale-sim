@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+// Package cloudinit renders the create-only cloud-init Secret a simulated
+// DPU's guest boots with.
+package cloudinit
 
 import (
 	"errors"
@@ -25,7 +27,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
 const (
@@ -36,33 +39,14 @@ const (
 	cloudInitDebugPassword = "ubuntu"
 )
 
-// bootstrapOutcome is what the fleet's instances report about their
-// per-ordinal Secrets. cloudInit holds the ordinals whose credentials and
-// cloud-init Secret are in place.
-type bootstrapOutcome struct {
-	cloudInit map[int]struct{}
-	// blocked names why an instance that hit no failure still wrote nothing,
-	// so status reports the blockage instead of claiming progress.
-	blocked *bootstrapConditionError
-	err     error
+// SecretLabels are the labels the cloud-init Secret for ordinal carries.
+func SecretLabels(fleet *scalev1alpha1.SimFleet, ordinal int) map[string]string {
+	return naming.InventoryLabels(fleet, fmt.Sprintf("%06d", ordinal))
 }
 
-// credentialsEligible reports whether an instance could issue a per-ordinal
-// management credential at all: only a fleet that boots guests with the agent
-// enabled gets one.
-func credentialsEligible(fleet *scalev1alpha1.SimFleet) bool {
-	return fleet.Spec.VirtualMachineTemplate != nil &&
-		validateVirtualMachineTemplate(fleet.Spec.VirtualMachineTemplate) == nil &&
-		dpuAgentEnabled(fleet)
-}
-
-func cloudInitSecretLabels(fleet *scalev1alpha1.SimFleet, ordinal int) map[string]string {
-	return inventoryLabels(fleet, fmt.Sprintf("%06d", ordinal))
-}
-
-// desiredCloudInitSecret renders a complete, create-only cloud-init payload.
+// DesiredSecret renders a complete, create-only cloud-init payload.
 // It is pure: callers must resolve and validate all dependencies first.
-func desiredCloudInitSecret(
+func DesiredSecret(
 	fleet *scalev1alpha1.SimFleet,
 	ordinal int,
 	managementKubeconfig []byte,
@@ -92,9 +76,9 @@ func newCloudInitSecret(
 			Kind:       "Secret",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.CloudInitSecretName(fleet.Name, ordinal),
+			Name:      naming.CloudInitSecretName(fleet.Name, ordinal),
 			Namespace: fleet.Namespace,
-			Labels:    cloudInitSecretLabels(fleet, ordinal),
+			Labels:    SecretLabels(fleet, ordinal),
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
@@ -122,11 +106,11 @@ func cloudInitUserdata(
 	// enabled in the image, and everything they read arrives in write_files.
 	var runcmd []string
 
-	if dpuAgentEnabled(fleet) {
+	if dpuagent.Enabled(fleet) {
 		if len(managementKubeconfig) == 0 {
 			return "", fmt.Errorf("management kubeconfig for ordinal %d is empty", ordinal)
 		}
-		conf, err := renderMockDPUAgentConfig(fleet, utils.SerialNumber(fleet.Name, ordinal))
+		conf, err := dpuagent.RenderConfig(fleet, naming.SerialNumber(fleet.Name, ordinal))
 		if err != nil {
 			return "", fmt.Errorf("render dpuagent configuration for ordinal %d: %w", ordinal, err)
 		}
@@ -138,25 +122,22 @@ func cloudInitUserdata(
 %s  - path: %s
     permissions: "0600"
     content: %s
-%s`, dpuAgentConfPath, confIndicator, indentedConf, dpuAgentKubeconfigPath, kubeconfigIndicator, indentedKubeconfig)
+%s`, dpuagent.ConfPath, confIndicator, indentedConf, dpuagent.KubeconfigPath, kubeconfigIndicator, indentedKubeconfig)
 	} else {
-		// Neither baked unit has anything to read without a configuration and a
-		// credential, and the join helper would otherwise fail on a loop.
+		// Without a configuration and a credential neither baked unit has work
+		// to do, and the join helper would fail in a loop, so mask both.
 		//
-		// A persistent mask, deliberately not --runtime. systemd searches
-		// /etc, then /run, then /usr/lib, and the image installs both units
-		// as vendor units under /usr/lib/systemd/system precisely so this
-		// can work: the mask writes /etc/systemd/system/<unit> -> /dev/null,
-		// which outranks the vendor copy and survives a reboot. --runtime
-		// would write to /run, which still outranks /usr/lib, but it would
-		// be lost on reboot for no benefit, and it silently stops working
-		// the moment anything puts a real unit file in /etc.
+		// The mask must be persistent: runcmd runs once per instance, so a
+		// --runtime mask in /run would be gone after a reboot and both units
+		// would start. A persistent mask links /etc/systemd/system/<unit> to
+		// /dev/null, which outranks the image's vendor units in
+		// /usr/lib/systemd/system. It fails if the image ever ships either unit
+		// in /etc instead.
 		//
-		// Ordering holds: runcmd runs inside cloud-final.service, both units
-		// are WantedBy=cloud-init.target and After=cloud-final.service, so
-		// their jobs are still blocked when this runs and --now cancels
-		// them.
-		for _, unit := range []string{mockDPUAgentUnit, waitKubeletJoinUnit} {
+		// runcmd runs inside cloud-final.service, and the image orders both
+		// units After=cloud-final.service, so their start jobs are still queued
+		// here and --now replaces them with stops.
+		for _, unit := range []string{dpuagent.MockDPUAgentUnit, dpuagent.WaitKubeletJoinUnit} {
 			runcmd = append(runcmd, "  - systemctl mask --now "+unit)
 		}
 	}
@@ -182,7 +163,7 @@ users:
     groups: sudo
     shell: /bin/bash
 write_files:
-%s%s`, utils.VirtualMachineName(fleet.Name, ordinal),
+%s%s`, naming.VirtualMachineName(fleet.Name, ordinal),
 		cloudInitDebugUser, cloudInitDebugPassword, cloudInitDebugUser,
 		writeFiles, runcmdSection), nil
 }
@@ -197,12 +178,12 @@ func dpuIdentityContent(fleet *scalev1alpha1.SimFleet, ordinal int) string {
 		ref = fleet.Spec.Bootstrap.DPUClusterRef
 	}
 	identityLines := []string{
-		fmt.Sprintf("DPU_NAME=%s", utils.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal)),
+		fmt.Sprintf("DPU_NAME=%s", naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal)),
 		fmt.Sprintf("DPU_NAMESPACE=%s", fleet.Namespace),
-		fmt.Sprintf("DPU_NODE_NAME=%s", utils.NodeName(
-			fleet.Name, utils.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode),
+		fmt.Sprintf("DPU_NODE_NAME=%s", naming.NodeName(
+			fleet.Name, naming.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode),
 		)),
-		fmt.Sprintf("DPU_DEVICE_NAME=%s", utils.DeviceName(fleet.Name, ordinal)),
+		fmt.Sprintf("DPU_DEVICE_NAME=%s", naming.DeviceName(fleet.Name, ordinal)),
 		fmt.Sprintf("DPU_CLUSTER_NAME=%s", ref.Name),
 		fmt.Sprintf("DPU_CLUSTER_NAMESPACE=%s", ref.Namespace),
 	}

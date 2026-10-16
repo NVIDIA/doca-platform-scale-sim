@@ -14,6 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package controller holds the SimFleet and SimInstance reconcilers. A
+// SimFleet rolls out one SimInstance per simulated DPU and owns the per-host
+// DPUNodes. Each SimInstance converges and tears down that DPU's DPUDevice,
+// KubeVirt guest, cloud-init Secret and credentials.
 package controller
 
 import (
@@ -35,19 +39,11 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/utils"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
-const (
-	labelFleetName = "scale.dpu.nvidia.com/fleet-name"
-	labelFleetUID  = "scale.dpu.nvidia.com/fleet-uid"
-	labelOrdinal   = "scale.dpu.nvidia.com/ordinal"
-	dpuDeviceField = "spec.dpuDeviceName"
-)
-
-const numberOfPFsDefault = 1
-
-const simFleetTeardownFinalizer = "scale.dpu.nvidia.com/simfleet-teardown"
+const dpuDeviceField = "spec.dpuDeviceName"
 
 // SimFleetReconciler reconciles a SimFleet object
 type SimFleetReconciler struct {
@@ -64,12 +60,9 @@ type SimFleetReconciler struct {
 // +kubebuilder:rbac:groups=scale.dpu.nvidia.com,resources=siminstances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=provisioning.dpu.nvidia.com,resources=dpunodes,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile rolls the fleet out through one SimInstance per ordinal: it
-// retires scaled-away and Failed instances, admits ordinals a batch at a time,
-// recreates any admitted ordinal whose instance is missing, groups created
-// devices into DPUNodes, and aggregates instance status. SimInstance events
-// drive the next pass, so nothing is requeued. A deleted fleet is held by its
-// teardown finalizer until every instance is gone; see reconcileDelete.
+// Reconcile keeps one SimInstance per admitted ordinal, admitting ordinals in
+// batches, and groups their devices into DPUNodes. It never requeues:
+// SimInstance events trigger the next pass. Deletion is in reconcileDelete.
 func (r *SimFleetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	fleet := &scalev1alpha1.SimFleet{}
 	if err := r.Get(ctx, req.NamespacedName, fleet); err != nil {
@@ -126,11 +119,11 @@ func (r *SimFleetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 // creates anything, so no instance or DPUNode can outlive a fleet that was
 // deleted without it.
 func (r *SimFleetReconciler) ensureFleetFinalizer(ctx context.Context, fleet *scalev1alpha1.SimFleet) error {
-	if controllerutil.ContainsFinalizer(fleet, simFleetTeardownFinalizer) {
+	if controllerutil.ContainsFinalizer(fleet, scalev1alpha1.SimFleetFinalizer) {
 		return nil
 	}
 	base := fleet.DeepCopy()
-	controllerutil.AddFinalizer(fleet, simFleetTeardownFinalizer)
+	controllerutil.AddFinalizer(fleet, scalev1alpha1.SimFleetFinalizer)
 	if err := r.Patch(ctx, fleet, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("add SimFleet %q finalizer: %w", fleet.Name, err)
 	}
@@ -145,7 +138,7 @@ func (r *SimFleetReconciler) ensureFleetFinalizer(ctx context.Context, fleet *sc
 // back, so nothing is requeued. Nothing is admitted, created, or reported
 // while the fleet is deleting.
 func (r *SimFleetReconciler) reconcileDelete(ctx context.Context, fleet *scalev1alpha1.SimFleet) error {
-	if !controllerutil.ContainsFinalizer(fleet, simFleetTeardownFinalizer) {
+	if !controllerutil.ContainsFinalizer(fleet, scalev1alpha1.SimFleetFinalizer) {
 		return nil
 	}
 	instances, err := r.listInstances(ctx, fleet)
@@ -162,7 +155,7 @@ func (r *SimFleetReconciler) reconcileDelete(ctx context.Context, fleet *scalev1
 		return nil
 	}
 	base := fleet.DeepCopy()
-	controllerutil.RemoveFinalizer(fleet, simFleetTeardownFinalizer)
+	controllerutil.RemoveFinalizer(fleet, scalev1alpha1.SimFleetFinalizer)
 	if err := r.Patch(ctx, fleet, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -185,7 +178,7 @@ func aggregateStatus(
 	status := *fleet.Status.DeepCopy()
 	replicas := fleet.Spec.Replicas
 	admitted := status.AdmittedReplicas
-	templateErr := validateVirtualMachineTemplate(fleet.Spec.VirtualMachineTemplate)
+	templateErr := kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate)
 
 	var created, vmReady, provisioned, failed int
 	observation := dpuObservation{}
@@ -220,7 +213,7 @@ func aggregateStatus(
 		}
 		provisioned := meta.FindStatusCondition(instance.Status.Conditions, scalev1alpha1.SimInstanceDPUProvisioned)
 		if provisioned != nil && provisioned.Reason == "DuplicateDPU" && observation.duplicateDevice == "" {
-			observation.duplicateDevice = utils.DeviceName(fleet.Name, ordinal)
+			observation.duplicateDevice = naming.DeviceName(fleet.Name, ordinal)
 		}
 	}
 
@@ -434,72 +427,6 @@ func virtualMachinesReadyCondition(
 		condition.Message = fmt.Sprintf("%d/%d VirtualMachines are ready", vmReady, desiredVMs)
 	}
 	return condition
-}
-
-func desiredDevice(fleet *scalev1alpha1.SimFleet, ordinal int) *provisioningv1.DPUDevice {
-	numberOfPFs := numberOfPFsDefault
-	if fleet.Spec.DPUDeviceTemplate != nil && fleet.Spec.DPUDeviceTemplate.Spec.NumberOfPFs != nil {
-		numberOfPFs = *fleet.Spec.DPUDeviceTemplate.Spec.NumberOfPFs
-	}
-	return &provisioningv1.DPUDevice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.DeviceName(fleet.Name, ordinal),
-			Namespace: fleet.Namespace,
-			Labels:    deviceLabels(fleet, ordinal),
-		},
-		Spec: provisioningv1.DPUDeviceSpec{
-			SerialNumber: utils.SerialNumber(fleet.Name, ordinal),
-			NumberOfPFs:  &numberOfPFs,
-		},
-	}
-}
-
-// withoutReservedDeviceLabels copies labels, dropping the keys only the
-// controller may set. It never mutates its argument, which is fleet spec.
-// The CRD rejects a selector that uses one, so filtering here is what covers
-// the DPUDevice template, which CEL does not reach, and any object admitted
-// before that rule existed.
-func withoutReservedDeviceLabels(labels map[string]string) map[string]string {
-	allowed := make(map[string]string, len(labels))
-	maps.Copy(allowed, labels)
-	for _, reserved := range scalev1alpha1.ReservedDeviceLabelKeys {
-		delete(allowed, reserved)
-	}
-	return allowed
-}
-
-// deviceLabels is everything a SimInstance puts on its DPUDevice when it
-// creates or repairs it: who owns it, which ordinal it is, and which DPUNode
-// it belongs to. It deliberately excludes spec.deviceSelectionLabels. Those
-// are what DPF's DPUSet matches on, and a device DPF claims is a device it
-// immediately opens Redfish against, so they are published by
-// ensureInstanceBMCIP together with the address that makes Redfish reachable.
-func deviceLabels(fleet *scalev1alpha1.SimFleet, ordinal int) map[string]string {
-	labels := map[string]string{}
-	if fleet.Spec.DPUDeviceTemplate != nil {
-		maps.Copy(labels, withoutReservedDeviceLabels(fleet.Spec.DPUDeviceTemplate.Metadata.Labels))
-	}
-	maps.Copy(labels, inventoryLabels(fleet, fmt.Sprintf("%06d", ordinal)))
-	labels[provisioningv1.DPUNodeNameLabel] = utils.NodeName(
-		fleet.Name,
-		utils.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode),
-	)
-	return labels
-}
-
-// deviceSelectionLabels is the selector DPF's DPUSet matches. Only
-// ensureInstanceBMCIP writes it, and only alongside spec.bmcIP. A selector is
-// fleet-author input, so it cannot carry a reserved identity key.
-func deviceSelectionLabels(fleet *scalev1alpha1.SimFleet) map[string]string {
-	return withoutReservedDeviceLabels(fleet.Spec.DeviceSelectionLabels)
-}
-
-func inventoryLabels(fleet *scalev1alpha1.SimFleet, ordinal string) map[string]string {
-	return map[string]string{
-		labelFleetName: fleet.Name,
-		labelFleetUID:  string(fleet.UID),
-		labelOrdinal:   ordinal,
-	}
 }
 
 func mergeLabels(object client.Object, desired map[string]string) {
