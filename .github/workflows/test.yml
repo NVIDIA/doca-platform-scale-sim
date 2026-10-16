@@ -30,6 +30,9 @@ jobs:
         with:
           path: bin
           key: ${{ runner.os }}-bin-${{ hashFiles('go.mod', 'Makefile') }}
+          # Tool binaries are named after their versions, so an older cache
+          # can only supply tools whose version is unchanged.
+          restore-keys: ${{ runner.os }}-bin-
 
       - name: Lint the Go code
         run: make lint
@@ -42,3 +45,6 @@ jobs:
 
       - name: Run unit tests
         run: make test
+
+      - name: Run shell script tests
+        run: make test-scripts

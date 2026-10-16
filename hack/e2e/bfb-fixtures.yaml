@@ -1,0 +1,90 @@
+# Serves the trimmed BF3 BFB the Kind e2e provisions with.
+#
+# DPF's provisioning controller downloads BFB.spec.url itself, from inside the
+# cluster, and a release bundle is far too large to serve from the Kind
+# cluster. bin/bf3-trimmed.bfb is the fixture doca-platform's own mock suite
+# installs, staged by hack/dpuagent/sync-bfb-fixture.sh and small enough to
+# travel in a ConfigMap; deploy-bfb-fixtures.sh fills that ConfigMap from the
+# staged file and applies this.
+#
+# BFB_FIXTURES_IMAGE is substituted by deploy-bfb-fixtures.sh with the tag it
+# loaded into the Kind node, so the node never resolves a registry for it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bfb-fixtures
+  namespace: dpf-operator-system
+  labels:
+    app.kubernetes.io/name: bfb-fixtures
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bfb-fixtures
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bfb-fixtures
+    spec:
+      # Kind clusters with no worker keep every workload on the control plane,
+      # and a tainted single node would leave this Pending forever.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: httpd
+          image: BFB_FIXTURES_IMAGE
+          imagePullPolicy: IfNotPresent
+          command: ["httpd", "-f", "-v", "-p", "8080", "-h", "/data"]
+          ports:
+            - name: http
+              containerPort: 8080
+          # Fetching the fixture itself is the only probe that proves the
+          # ConfigMap mounted; a listening socket would go Ready with an empty
+          # document root and fail much later as a BFB download error.
+          readinessProbe:
+            httpGet:
+              path: /bf3-trimmed.bfb
+              port: http
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: fixtures
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: fixtures
+          configMap:
+            name: bfb-fixtures
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bfb-fixtures
+  namespace: dpf-operator-system
+  labels:
+    app.kubernetes.io/name: bfb-fixtures
+spec:
+  selector:
+    app.kubernetes.io/name: bfb-fixtures
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
