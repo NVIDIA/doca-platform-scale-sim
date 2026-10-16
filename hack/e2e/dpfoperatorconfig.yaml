@@ -1,0 +1,26 @@
+apiVersion: operator.dpu.nvidia.com/v1alpha1
+kind: DPFOperatorConfig
+metadata:
+  name: dpfoperatorconfig
+  namespace: dpf-operator-system
+spec:
+  deploymentMode: zero-trust
+  overrides:
+    # zero-trust forces the Redfish install interface, and the provisioning
+    # controller then derives the bfb-registry address from this VIP: it exits
+    # at startup unless the VIP parses as an IP. deploy-dpf.sh substitutes the
+    # placeholders with the endpoint of the default kubernetes Service.
+    kubernetesAPIServerVIP: KUBERNETES_API_SERVER_VIP
+    kubernetesAPIServerPort: KUBERNETES_API_SERVER_PORT
+  dpuDetector:
+    disable: true
+  provisioningController:
+    installInterface:
+      installViaRedfish:
+        skipDPUNodeDiscovery: true
+  kamajiClusterManager:
+    disable: false
+  staticClusterManager:
+    disable: true
+  monitoring:
+    disable: true
