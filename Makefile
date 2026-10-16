@@ -244,8 +244,9 @@ dpuagent-build-test: ## Run dpuagent build contract test.
 	bash "$(CURDIR)/hack/dpuagent/build_test.sh"
 
 .PHONY: test-scripts
-test-scripts: dpuagent-build-test ## Run the shell contract tests for the hack scripts.
+test-scripts: dpuagent-build-test ## Run the shell contract tests for the hack and node image scripts.
 	bash "$(CURDIR)/hack/dpuagent/sync-bfb-fixture_test.sh"
+	$(MAKE) -C "$(CURDIR)/images/simfleet-node" test
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
