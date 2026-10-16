@@ -412,13 +412,13 @@ $(HELMFILE): | $(LOCALBIN)
 
 .PHONY: helm-diff
 helm-diff: helm ## Install the helm-diff plugin if necessary.
-	$(HELM) plugin list | grep -E '^diff[[:space:]]' | grep $(HELM_DIFF_VERSION) || \
+	$(HELM) plugin list | awk '$$1 == "diff" && $$2 == "$(HELM_DIFF_VERSION)" { found = 1 } END { exit !found }' || \
 		( ($(HELM) plugin uninstall diff || true) && \
 		  $(HELM) plugin install https://github.com/databus23/helm-diff --version $(HELM_DIFF_VERSION) )
 
 .PHONY: helm-git
 helm-git: helm ## Install the helm-git plugin if necessary.
-	$(HELM) plugin list | grep helm-git | grep $(HELM_GIT_VERSION) || \
+	$(HELM) plugin list | awk '$$1 == "helm-git" && $$2 == "$(HELM_GIT_VERSION)" { found = 1 } END { exit !found }' || \
 		( ($(HELM) plugin uninstall helm-git || true) && \
 		  $(HELM) plugin install https://github.com/aslafy-z/helm-git --version $(HELM_GIT_VERSION) )
 
