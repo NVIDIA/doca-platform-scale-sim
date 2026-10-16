@@ -1,0 +1,17 @@
+# Checks run by `make verify-manifests` against the rendered Helm chart.
+check:
+- CKV_K8S_8 # Liveness Probe Should be Configured
+- CKV_K8S_9 # Readiness Probe Should be Configured
+- CKV_K8S_11 # CPU limits should be set
+- CKV_K8S_13 # Memory limits should be set
+- CKV_K8S_15 # Image Pull Policy should be Always
+- CKV_K8S_29 # Apply security context to your pods and containers
+- CKV_K8S_35 # Prefer using secrets as files over secrets as environment variables
+- CKV_K8S_38 # Ensure that Service Account Tokens are only mounted where necessary
+- CKV_K8S_40 # Containers should run as a high UID to avoid host conflict
+- CKV_K8S_43 # Image should use digest
+- CKV_K8S_49 # Minimize wildcard use in Roles and ClusterRoles
+framework:
+- kubernetes
+compact: true
+quiet: true

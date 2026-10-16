@@ -1,0 +1,33 @@
+apiVersion: scale.dpu.nvidia.com/v1alpha1
+kind: SimFleet
+metadata:
+  name: scale-3000
+  namespace: dpf-operator-system
+spec:
+  replicas: 20
+  devicesPerDPUNode: 10
+  deviceSelectionLabels:
+    scale.dpu.nvidia.com/pool: scale-3000
+  bootstrap:
+    dpuClusterRef:
+      name: tenant1
+      namespace: dpf-operator-system
+  # Illustrative only: not pullable until bootstrap Secrets and a real image are provided.
+  virtualMachineTemplate:
+    image: registry.example.com/simfleet-node@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    runStrategy: Always
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+    storage:
+      ephemeral: true
+    podNetwork:
+      bridge: true
+  dpuNodeTemplate:
+    spec:
+      nodeRebootMethod:
+        external: {}
+  dpuDeviceTemplate:
+    spec:
+      numberOfPFs: 1
