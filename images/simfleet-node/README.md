@@ -144,10 +144,10 @@ As vendor units they mask the ordinary way, and the mask persists across
 reboots. Enabling still works: the enablement symlink is
 `/etc/systemd/system/cloud-init.target.wants/<unit>`, a different path from
 the mask symlink, so a masked unit stays enabled on disk and systemd simply
-declines to start it. `verify-guest.sh` asserts the vendor placement and the
-`cloud-init.target` enablement; a consistency test in
-`test/consistency` ties that placement to the mask form
-the controller renders, because neither suite can see the other half.
+declines to start it. `test.sh` and `verify-guest.sh` assert the vendor
+placement and the `cloud-init.target` enablement, and
+`internal/cloudinit/secret_test.go` asserts that the controller renders the
+persistent `systemctl mask --now` form rather than `--runtime`.
 
 Build the mock binary before the image, as in [Build and push](#build-and-push),
 or the build fails with the command to run. `dpuagent-build` invokes `hack/dpuagent/build.sh`, which checks out the commit
@@ -155,7 +155,7 @@ in `hack/dpuagent/mock.ref` and writes `bin/mock-dpuagent`. That commit and
 the binary's digest are both part of the source hash, so a rebuilt mock never
 reuses a cached image. `mock.ref` is a commit of the public GitHub mirror, and
 the controller module requires `github.com/nvidia/doca-platform` at the same
-commit (`TestMockRefIsTheRequiredDPFModule` fails otherwise), so the
+commit (`test/consistency` fails otherwise), so the
 controller's tests exercise the code the guest runs. Bump both together.
 
 ### Flannel owns pod networking
@@ -179,12 +179,11 @@ what a real `docker run` would, with the mounts translated back to host paths,
 so the disk stages are still exercised rather than merely requested. It needs
 nothing but bash and coreutils, so it also runs on macOS. The unit-test GitHub
 workflow runs it on every pull request through `make test-scripts` in the
-repository root. The `v1.36.4` guest pin shared with CI and the
-scale scenario is checked by `test/consistency`, which
-`make test` in the controller runs.
+repository root.
 
 The output is a KubeVirt containerDisk containing `/disk/disk.img`; it is not
-a runnable Ubuntu application container. Guest paths and units are checked by
-`verify-guest.sh` at build time and by `test/consistency`
-(`TestNodeImageShipsAgentGuestPaths`), which keeps the image and controller
-cloud-init in step.
+a runnable Ubuntu application container. Guest paths, units and the `v1.36.4`
+package pin are checked by `verify-guest.sh` at build time. The config,
+kubeconfig and identity paths are also named by the controller
+(`internal/dpuagent/config.go`, `internal/cloudinit/secret.go`), so renaming
+one means changing both sides; the Kind e2e is what catches a mismatch.

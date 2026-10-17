@@ -17,10 +17,12 @@
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
-# Kept in sync with SIMFLEET_KUBE_APT_VERSION in ../lib.sh by the version
-# consistency test in test/consistency.
-KUBE_APT_VERSION="${KUBE_APT_VERSION:-1.36.4-1.1}"
+# Runs inside the guest disk, where ../lib.sh is not available, so the version
+# comes from customize-disk.sh rather than a second pin here.
+KUBE_APT_VERSION="${KUBE_APT_VERSION:?KUBE_APT_VERSION must be set; customize-disk.sh passes SIMFLEET_KUBE_APT_VERSION}"
 KUBE_VERSION="v${KUBE_APT_VERSION%%-*}"
+# pkgs.k8s.io publishes one apt repository per minor release.
+KUBE_MINOR="${KUBE_VERSION%.*}"
 
 # The base image points /etc/resolv.conf at systemd-resolved's 127.0.0.53
 # stub, and resolved does not run under virt-customize, so every apt lookup
@@ -94,10 +96,10 @@ EOF
 chmod 0644 /etc/sysctl.d/99-simfleet-k8s.conf
 
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key \
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/${KUBE_MINOR}/deb/Release.key" \
 	| gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /' \
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBE_MINOR}/deb/ /" \
 	> /etc/apt/sources.list.d/kubernetes.list
 
 apt-get update
