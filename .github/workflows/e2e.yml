@@ -82,26 +82,6 @@ jobs:
       - name: Check the node image build host
         if: steps.node-image-cache.outputs.cache-hit != 'true'
         run: bash images/simfleet-node/check-host.sh
-      # RUN --mount=type=cache contents are not part of any image or buildx
-      # cache export, so the controller's Go build cache is moved in and out of
-      # the builder by hand.
-      - name: Cache the controller Go build
-        id: controller-go-build
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/controller-go-build
-          key: controller-go-build-${{ hashFiles('go.sum', 'Dockerfile', 'Makefile') }}
-          restore-keys: controller-go-build-
-      - name: Create the controller image builder
-        run: make docker-buildx-setup
-      - name: Inject the controller Go build cache
-        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
-        with:
-          builder: simfleet-controller-builder
-          cache-map: |
-            {"${{ runner.temp }}/controller-go-build": "/root/.cache/go-build"}
-          scratch-dir: ${{ runner.temp }}/buildkit-cache-dance
-          skip-extraction: ${{ steps.controller-go-build.outputs.cache-hit }}
       - name: Run the e2e suite
         run: make test-e2e
       # After a passing run, the suite has deleted its cluster, so there is room

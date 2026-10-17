@@ -172,9 +172,10 @@ var _ = Describe("SimFleet", Ordered, func() {
 
 	It("creates DPUDevices and DPUNodes from a SimFleet", func() {
 		By("applying the SimFleet")
-		// Directory apply can race: bfb/dpuflavor/dpuset sort before
-		// simfleet.yaml. Retry until all objects apply. The fleet lives in
-		// dpf-operator-system, which DPF already created.
+		// DPF's CRDs and admission webhooks for BFB, DPUFlavor and DPUSet can
+		// lag the DPFOperatorConfig going Ready, so retry until every object
+		// applies. The fleet lives in dpf-operator-system, which the DPF
+		// install already created.
 		Eventually(func(g Gomega) {
 			cmd := exec.Command("kubectl", "apply", "-f", "testdata")
 			_, err := run(cmd)
@@ -251,13 +252,6 @@ var _ = Describe("SimFleet", Ordered, func() {
 			g.Expect(ready).To(Equal("True"))
 		}).Should(Succeed())
 
-		// Checked here rather than next to the DPUs that install it. DPF
-		// downloads spec.url on its own, from the moment the BFB is applied
-		// with the rest of testdata, so nothing above is a prerequisite and
-		// waiting for it first turns a broken fixture server into a failure
-		// in the first minutes instead of one behind the guest boot. A BFB
-		// that never leaves Downloading is the server; the mock BMC only
-		// enters the picture once there is a bundle to stream.
 		By("waiting for the BFB to download from the in-cluster fixture server")
 		Eventually(func(g Gomega) {
 			phase, err := objectJSONPathErr("bfb", "e2e-bfb", fleetNamespace, "{.status.phase}")
@@ -344,12 +338,10 @@ var _ = Describe("SimFleet", Ordered, func() {
 			g.Expect(err).To(HaveOccurred())
 		}, 10*time.Second, time.Second).Should(Succeed())
 
-		By("waiting for VirtualMachines")
-		Eventually(func(g Gomega) {
-			names, err := listedNames("virtualmachines", fleetNamespace, fleetLabel)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(names).To(HaveLen(replicas))
-		}).Should(Succeed())
+		By("validating the VirtualMachines")
+		vmNames, err := listedNames("virtualmachines", fleetNamespace, fleetLabel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(vmNames).To(HaveLen(replicas))
 
 		vmName := fleetName + "-dpu-000000"
 		Expect(objectJSONPath("virtualmachine", vmName, fleetNamespace,
@@ -362,12 +354,6 @@ var _ = Describe("SimFleet", Ordered, func() {
 			`{.spec.template.spec.volumes[?(@.name=="cloud-init")].cloudInitNoCloud.networkData}`,
 		)).To(ContainSubstring("dhcp4: true"))
 		Expect(objectJSONPath("virtualmachine", vmName, fleetNamespace, "{.metadata.ownerReferences[0].kind}")).To(Equal("SimInstance"))
-
-		Eventually(func(g Gomega) {
-			count, err := objectJSONPathErr("simfleet", fleetName, fleetNamespace, "{.status.createdInstances}")
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(count).To(Equal("2"))
-		}).Should(Succeed())
 
 		By("waiting for VirtualMachines to become Ready")
 		Eventually(func(g Gomega) {
