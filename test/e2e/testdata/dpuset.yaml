@@ -1,0 +1,18 @@
+apiVersion: provisioning.dpu.nvidia.com/v1alpha1
+kind: DPUSet
+metadata:
+  name: e2e-dpuset
+  namespace: dpf-operator-system
+spec:
+  strategy:
+    type: OnDelete
+  dpuDeviceSelector:
+    matchLabels:
+      scale.dpu.nvidia.com/pool: e2e
+  dpuTemplate:
+    spec:
+      dpuFlavor: e2e-flavor
+      bfb:
+        name: e2e-bfb
+      nodeEffect:
+        noEffect: true

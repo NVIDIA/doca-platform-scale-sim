@@ -163,4 +163,8 @@ enable_pod_proxy_arp
 "${KUBECTL_BIN}" delete ns local-path-storage --ignore-not-found
 "${KUBECTL_BIN}" delete sc standard --ignore-not-found
 
+# Each CoreDNS replica requests 100m, and the suite has to schedule on a
+# 2-vCPU runner.
+"${KUBECTL_BIN}" -n kube-system scale deployment coredns --replicas=1
+
 echo "Kind cluster '${CLUSTER_NAME}' is ready."

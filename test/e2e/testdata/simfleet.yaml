@@ -1,0 +1,37 @@
+apiVersion: scale.dpu.nvidia.com/v1alpha1
+kind: SimFleet
+metadata:
+  name: e2e-fleet
+  namespace: dpf-operator-system
+spec:
+  replicas: 2
+  devicesPerDPUNode: 1
+  deviceSelectionLabels:
+    scale.dpu.nvidia.com/pool: e2e
+  bootstrap:
+    dpuClusterRef:
+      name: e2e-tenant
+      namespace: dpf-operator-system
+  # Explicit so the guest path cannot silently fall back to agent-disabled
+  # identity-only cloud-init if CRD defaulting is skipped.
+  dpuAgent: {}
+  virtualMachineTemplate:
+    # amd64-only containerDisk; test-e2e requires Linux amd64.
+    architecture: amd64
+    image: simfleet-node:e2e
+    runStrategy: Always
+    resources:
+      requests:
+        # Both guests, KubeVirt's per-VM overhead and the tenant control plane
+        # have to fit next to DPF on a 2-vCPU, 8 GB runner.
+        cpu: 100m
+        memory: 1536Mi
+    podNetwork:
+      bridge: true
+  dpuNodeTemplate:
+    spec:
+      nodeRebootMethod:
+        external: {}
+  dpuDeviceTemplate:
+    spec:
+      numberOfPFs: 1

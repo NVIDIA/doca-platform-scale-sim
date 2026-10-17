@@ -15,8 +15,8 @@
 # Shared helpers for the simfleet-node containerDisk recipe.
 # shellcheck shell=bash
 
-# Kept in sync with guest/install.sh by the version consistency test in
-# test/consistency.
+# The Kubernetes packages the guest installs; verify-guest.sh rejects an image
+# built with any other version.
 SIMFLEET_KUBE_APT_VERSION="1.36.4-1.1"
 SIMFLEET_DISK_SIZE="10G"
 # Stamped onto the built image so CI can tell a cached image apart from a stale
@@ -29,9 +29,8 @@ SIMFLEET_OCI_VERSION_LABEL="org.opencontainers.image.version"
 # never published.
 SIMFLEET_BUILDER_IMAGE="simfleet-node-builder:local"
 
-# Where the mock-dpuagent artifacts live in the guest. The controller renders these
-# same paths into cloud-init, and the consistency test in
-# test/consistency keeps the two in step.
+# Where the mock-dpuagent artifacts live in the guest. The baked units and
+# verify-guest.sh name this directory too.
 SIMFLEET_DPUAGENT_GUEST_DIR="/opt/dpf"
 
 # simfleet_dpuagent_bin echoes the linux/amd64 mock-dpuagent binary to bake in.
