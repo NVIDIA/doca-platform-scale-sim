@@ -18,7 +18,6 @@ NODE_IMG ?= simfleet-node:local
 BASE_DIGEST ?= sha256:f3824dc850e0655eae3a6f744ec71a38b216da163636e1d0a724715316515555
 BASE_IMAGE ?= quay.io/containerdisks/ubuntu:24.04@$(BASE_DIGEST)
 DISK_SIZE ?= 10G
-KUBE_APT_VERSION ?=
 IMAGE_VERSION ?=
 # linux/amd64 mock-dpuagent built from the commit in hack/dpuagent/mock.ref.
 # Produced by `make dpuagent-build`, which writes
@@ -31,8 +30,7 @@ BUILDER_IMAGE ?= simfleet-node-builder:local
 
 BUILD_ENV = BASE_IMAGE="$(BASE_IMAGE)" NODE_IMG="$(NODE_IMG)" DISK_SIZE="$(DISK_SIZE)" \
 	  CONTAINER_TOOL="$(CONTAINER_TOOL)" BUILDER_IMAGE="$(BUILDER_IMAGE)" \
-	  KUBE_APT_VERSION="$(KUBE_APT_VERSION)" IMAGE_VERSION="$(IMAGE_VERSION)" \
-	  DPUAGENT_BIN="$(DPUAGENT_BIN)"
+	  IMAGE_VERSION="$(IMAGE_VERSION)" DPUAGENT_BIN="$(DPUAGENT_BIN)"
 
 .PHONY: check-host
 check-host:
@@ -56,8 +54,7 @@ node-image-build-cached:
 .PHONY: node-image-source-hash
 node-image-source-hash:
 	@BASE_IMAGE="$(BASE_IMAGE)" DISK_SIZE="$(DISK_SIZE)" \
-	  KUBE_APT_VERSION="$(KUBE_APT_VERSION)" IMAGE_VERSION="$(IMAGE_VERSION)" \
-	  DPUAGENT_BIN="$(DPUAGENT_BIN)" \
+	  IMAGE_VERSION="$(IMAGE_VERSION)" DPUAGENT_BIN="$(DPUAGENT_BIN)" \
 	  ./source-hash.sh
 
 .PHONY: node-image-push

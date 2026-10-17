@@ -18,9 +18,7 @@ set -euo pipefail
 
 # Static and mocked checks for the simfleet-node recipe. Everything here runs
 # on any POSIX host with bash and coreutils; the real build needs Linux amd64
-# and libguestfs. The v1.36.4 guest pin is covered by the Go consistency test in
-# test/consistency, so this script needs no interpreter
-# beyond the shell.
+# and libguestfs.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"
@@ -95,7 +93,10 @@ test_recipe_contract() {
 	if grep -Eq '^KUBE_VERSION[[:space:]]*[?:+]?=' "${ROOT}/Makefile"; then
 		fail "Makefile must not expose KUBE_VERSION independently of guest contents"
 	fi
-	assert_contains 'KUBE_APT_VERSION="${KUBE_APT_VERSION:-1.36.4-1.1}"' "${ROOT}/guest/install.sh"
+	# lib.sh is the one pin; install.sh must fail rather than fall back to its own.
+	assert_contains 'KUBE_APT_VERSION="${KUBE_APT_VERSION:?' "${ROOT}/guest/install.sh"
+	assert_absent '1.36' "${ROOT}/guest/install.sh"
+	assert_contains 'pkgs.k8s.io/core:/stable:/${KUBE_MINOR}/deb/' "${ROOT}/guest/install.sh"
 	assert_contains 'SIMFLEET_KUBE_APT_VERSION="1.36.4-1.1"' "${ROOT}/lib.sh"
 	test ! -e "${ROOT}/guest/10-simfleet-bridge.conf" \
 		|| fail "the fixed host-local CNI configuration must not ship"
@@ -553,8 +554,6 @@ test_source_hash() {
 	test "${first}" != "${second}" || fail "source hash ignores BASE_IMAGE"
 	second="$(run_source_hash "${ROOT}/source-hash.sh" DISK_SIZE=20G)"
 	test "${first}" != "${second}" || fail "source hash ignores DISK_SIZE"
-	# A synthetic version outside the 1.3x line, so the stray-version check in
-	# the Go consistency suite does not read this override as a partial bump.
 	second="$(run_source_hash "${ROOT}/source-hash.sh" KUBE_APT_VERSION=9.99.9-9.9)"
 	test "${first}" != "${second}" || fail "source hash ignores KUBE_APT_VERSION"
 	second="$(run_source_hash "${ROOT}/source-hash.sh" IMAGE_VERSION=v9.9.9)"
@@ -1556,8 +1555,6 @@ net.ipv4.ip_forward = 1'; then
 }
 
 test_verifier_rejects_wrong_kubernetes_version() {
-	# Deliberately a pre-1.3x version: the repository-wide version consistency
-	# test treats any 1.3x package version in this file as a missed bump.
 	if run_verifier "${TMP}/verify-version.out" FAKE_KUBE_DPKG_VERSION=1.29.0-1.1; then
 		fail "verify-guest.sh accepted the wrong Kubernetes package version"
 	fi
