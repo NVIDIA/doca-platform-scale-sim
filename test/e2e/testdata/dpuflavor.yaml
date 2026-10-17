@@ -1,0 +1,6 @@
+apiVersion: provisioning.dpu.nvidia.com/v1alpha1
+kind: DPUFlavor
+metadata:
+  name: e2e-flavor
+  namespace: dpf-operator-system
+spec: {}
