@@ -165,7 +165,7 @@ E2E_DPUAGENT_BIN := $(CURDIR)/bin/mock-dpuagent
 # download, and 27m for Redfish provisioning and the tenant join; then 6m to
 # tear the replaced ordinal down and 27m to bring it back, and 6m to tear the
 # scaled-away ordinal down. That is 115m, which leaves the rest ~4m. The 24h
-# management token lifetime is the hard ceiling (test/consistency).
+# management token lifetime is the hard ceiling.
 E2E_TEST_TIMEOUT ?= 119m
 
 .PHONY: deploy-e2e-kubevirt
@@ -281,7 +281,7 @@ verify-manifests: helm ## Run the checkov checks in .checkov.yaml against the re
 
 .PHONY: dpuagent-build
 dpuagent-build: ## Build pinned mock-dpuagent binary into bin/mock-dpuagent.
-	"$(CURDIR)/hack/dpuagent/build.sh"
+	DPUAGENT_OUT="$(E2E_DPUAGENT_BIN)" "$(CURDIR)/hack/dpuagent/build.sh"
 
 .PHONY: dpuagent-build-test
 dpuagent-build-test: ## Run dpuagent build contract test.
