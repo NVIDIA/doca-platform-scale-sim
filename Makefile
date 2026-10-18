@@ -290,6 +290,14 @@ verify-manifests: helm ## Run the checkov checks in .checkov.yaml against the re
 		-v "$(CURDIR)/.checkov.yaml":/config/.checkov.yaml:ro \
 		$(CHECKOV_IMAGE) --config-file /config/.checkov.yaml -f /data/simfleet-controller.yaml
 
+# CONFORM_FLAGS defaults to checking the HEAD commit; CI passes a revision
+# range to check every commit of a pull request.
+CONFORM_FLAGS ?=
+
+.PHONY: commit-check
+commit-check: conform ## Run conform to validate commit messages against .conform.yaml.
+	"$(CONFORM)" enforce $(CONFORM_FLAGS)
+
 ##@ Build
 
 .PHONY: dpuagent-build
@@ -431,6 +439,7 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest-$(ENVTEST_VERSION)
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 HELM_DOCS ?= $(LOCALBIN)/helm-docs-$(HELM_DOCS_VERSION)
 SHFMT ?= $(LOCALBIN)/shfmt-$(SHFMT_VERSION)
+CONFORM ?= $(LOCALBIN)/conform-$(CONFORM_VERSION)
 
 TOOL_OS ?= $(shell uname -s | tr A-Z a-z)
 TOOL_ARCH ?= $(shell uname -m)
@@ -451,6 +460,7 @@ HELM_DIFF_VERSION ?= 3.12.2
 HELM_GIT_VERSION ?= 1.4.0
 HELM_DOCS_VERSION ?= v1.14.2
 SHFMT_VERSION ?= v3.11.0
+CONFORM_VERSION ?= v0.1.0-alpha.30
 
 # Defined before its first use: ENVTEST names a rule target, and make expands
 # rule targets while it parses.
@@ -515,6 +525,11 @@ $(HELM_DOCS): | $(LOCALBIN)
 shfmt: $(SHFMT) ## Download shfmt locally if necessary.
 $(SHFMT): | $(LOCALBIN)
 	$(call go-install-tool,$(SHFMT),mvdan.cc/sh/v3/cmd/shfmt,$(SHFMT_VERSION))
+
+.PHONY: conform
+conform: $(CONFORM) ## Download conform locally if necessary.
+$(CONFORM): | $(LOCALBIN)
+	$(call go-install-tool,$(CONFORM),github.com/siderolabs/conform/cmd/conform,$(CONFORM_VERSION))
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
