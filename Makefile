@@ -288,8 +288,9 @@ dpuagent-build-test: ## Run dpuagent build contract test.
 	bash "$(CURDIR)/hack/dpuagent/build_test.sh"
 
 .PHONY: test-scripts
-test-scripts: dpuagent-build-test ## Run the shell contract tests for the hack and node image scripts.
+test-scripts: dpuagent-build-test ## Run the shell contract tests for the hack, node image and scenario scripts.
 	bash "$(CURDIR)/hack/dpuagent/sync-bfb-fixture_test.sh"
+	bash "$(CURDIR)/docs/scenarios/passthrough/test.sh"
 	$(MAKE) -C "$(CURDIR)/images/simfleet-node" test
 
 .PHONY: build
