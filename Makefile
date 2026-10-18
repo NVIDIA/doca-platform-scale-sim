@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Image and Helm chart publish to GitHub Container Registry.
-REGISTRY ?= ghcr.io/nvidia/doca-platform-scale-sim
+# REGISTRY defaults to a registry that does not exist, so a push without an
+# explicit REGISTRY cannot overwrite published artifacts. Releases publish to
+# GitHub Container Registry with REGISTRY=ghcr.io/nvidia/doca-platform-scale-sim.
+REGISTRY ?= example.com
 VERSION ?= 0.1.0
 TAG ?= v$(VERSION)
 APP_VERSION ?= $(TAG)
@@ -65,6 +67,10 @@ manifests: controller-gen ## Generate ClusterRole and CustomResourceDefinition o
 generate: controller-gen ## Generate DeepCopy, DeepCopyInto, and DeepCopyObject implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(YEAR) paths="$(CONTROLLER_GEN_PATHS)"
 
+.PHONY: generate-modules
+generate-modules: ## Run go mod tidy to update go modules.
+	go mod tidy
+
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	go fmt ./...
@@ -73,12 +79,18 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+# GO_TEST_ARGS defines additional go test arguments. linkmode=internal links
+# with the Go linker, which avoids the macOS linker's "malformed LC_DYSYMTAB"
+# warnings under -race; see https://github.com/golang/go/issues/61229.
+GO_TEST_ARGS ?= -race -ldflags=-linkmode=internal
+TESTPKGS ?= $$(go list ./... | grep -v -e /e2e -e /test/consistency)
+
 .PHONY: test
-test: manifests generate fmt vet setup-envtest ## Run tests.
+test: setup-envtest ## Run the unit and envtest tests. `make verify` checks the generated files.
 	# The consistency package asserts facts about files the go test cache does
 	# not track, so a cached pass would survive a drift it exists to catch.
 	go test -count=1 ./test/consistency/
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v -e /e2e -e /test/consistency) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $(TESTPKGS) $(GO_TEST_ARGS) -coverprofile cover.out
 
 # e2e uses a local Kind cluster and DPF prerequisite charts from
 # https://github.com/NVIDIA/doca-platform/tree/public-release-v26.8
@@ -204,13 +216,14 @@ test-e2e-run: check-e2e-host setup-test-e2e deploy-e2e-dpf deploy-e2e-kubevirt d
 cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
 	$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# GOOS=linux lints the code the controller image ships, whatever the host OS.
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
-	"$(GOLANGCI_LINT)" run
+lint: golangci-lint lint-config ## Run golangci-lint linter
+	GOOS=linux "$(GOLANGCI_LINT)" run --timeout 5m
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
-	"$(GOLANGCI_LINT)" run --fix
+	GOOS=linux "$(GOLANGCI_LINT)" run --fix
 
 .PHONY: lint-config
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
@@ -230,10 +243,10 @@ VERIFY_TARGETS ?= generate copyright shfmt manifests
 verify: $(addprefix verify-,$(VERIFY_TARGETS)) ## Run all verify-* targets
 
 .PHONY: verify-generate
-verify-generate: manifests generate fmt generate-docs-helm ## Verify auto-generated code, manifests and docs did not change
+verify-generate: manifests generate generate-modules fmt generate-docs-helm ## Verify auto-generated code, modules and docs did not change
 	# Use intent-to-add to check for untracked files after generation.
 	git add -N .
-	@git diff --quiet || { git diff --stat; echo "Please, commit the result of 'make manifests generate fmt generate-docs-helm'"; exit 1; }
+	@git diff --quiet || { git diff --stat; echo "Please, commit the result of 'make manifests generate generate-modules fmt generate-docs-helm'"; exit 1; }
 
 # Tracked and untracked files, so a new file is checked before it is committed.
 SOURCE_FILES = git ls-files --cached --others --exclude-standard --
@@ -324,7 +337,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 PROJECT_NAME ?= doca-platform-scale-sim
 PROJECT_REPO ?= https://github.com/NVIDIA/doca-platform-scale-sim
-FULL_COMMIT ?= $(shell git rev-parse HEAD)
+FULL_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 DOCKER_BUILD_FLAGS = \
@@ -407,15 +420,17 @@ $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
 ## Tool Binaries
+# Each binary is named after its version, so bumping a version names a file
+# that does not exist yet and make installs it.
 KUBECTL ?= kubectl
 KIND ?= $(LOCALBIN)/kind-$(KIND_VERSION)
 HELM ?= $(LOCALBIN)/helm-$(HELM_VERSION)
 HELMFILE ?= $(LOCALBIN)/helmfile-$(HELMFILE_VERSION)
-CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
-ENVTEST ?= $(LOCALBIN)/setup-envtest
-GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
-HELM_DOCS ?= $(LOCALBIN)/helm-docs
-SHFMT ?= $(LOCALBIN)/shfmt
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
+ENVTEST ?= $(LOCALBIN)/setup-envtest-$(ENVTEST_VERSION)
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
+HELM_DOCS ?= $(LOCALBIN)/helm-docs-$(HELM_DOCS_VERSION)
+SHFMT ?= $(LOCALBIN)/shfmt-$(SHFMT_VERSION)
 
 TOOL_OS ?= $(shell uname -s | tr A-Z a-z)
 TOOL_ARCH ?= $(shell uname -m)
@@ -437,6 +452,12 @@ HELM_GIT_VERSION ?= 1.4.0
 HELM_DOCS_VERSION ?= v1.14.2
 SHFMT_VERSION ?= v3.11.0
 
+# Defined before its first use: ENVTEST names a rule target, and make expands
+# rule targets while it parses.
+define gomodver
+$(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
+endef
+
 #ENVTEST_VERSION is the controller-runtime version to use for setup-envtest, derived from go.mod
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
@@ -457,7 +478,7 @@ $(KIND): | $(LOCALBIN)
 
 .PHONY: helm
 helm: $(HELM) ## Download helm locally if necessary.
-$(HELM): $(LOCALBIN)
+$(HELM): | $(LOCALBIN)
 	curl -fsSL https://get.helm.sh/helm-$(HELM_VERSION)-$(TOOL_OS)-$(HELM_ARCH).tar.gz | \
 		tar -xzf - --strip-components=1 -C $(LOCALBIN) $(TOOL_OS)-$(HELM_ARCH)/helm
 	mv $(LOCALBIN)/helm $(HELM)
@@ -487,17 +508,17 @@ helm-git: helm ## Install the helm-git plugin if necessary.
 
 .PHONY: helm-docs
 helm-docs: $(HELM_DOCS) ## Download helm-docs locally if necessary.
-$(HELM_DOCS): $(LOCALBIN)
+$(HELM_DOCS): | $(LOCALBIN)
 	$(call go-install-tool,$(HELM_DOCS),github.com/norwoodj/helm-docs/cmd/helm-docs,$(HELM_DOCS_VERSION))
 
 .PHONY: shfmt
 shfmt: $(SHFMT) ## Download shfmt locally if necessary.
-$(SHFMT): $(LOCALBIN)
+$(SHFMT): | $(LOCALBIN)
 	$(call go-install-tool,$(SHFMT),mvdan.cc/sh/v3/cmd/shfmt,$(SHFMT_VERSION))
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
-$(CONTROLLER_GEN): $(LOCALBIN)
+$(CONTROLLER_GEN): | $(LOCALBIN)
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
 
 .PHONY: setup-envtest
@@ -510,12 +531,12 @@ setup-envtest: envtest ## Download the binaries required for ENVTEST in the loca
 
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
-$(ENVTEST): $(LOCALBIN)
+$(ENVTEST): | $(LOCALBIN)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
-$(GOLANGCI_LINT): $(LOCALBIN)
+$(GOLANGCI_LINT): | $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
 	@test -f .custom-gcl.yml && { \
 		echo "Building custom golangci-lint with plugins..." && \
@@ -524,21 +545,15 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 	} || true
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
-# $1 - target path with name of binary
+# $1 - target path with name of binary, including the version
 # $2 - package url which can be installed
 # $3 - specific version of package
 define go-install-tool
-@[ -f "$(1)-$(3)" ] && [ "$$(readlink -- "$(1)" 2>/dev/null)" = "$(1)-$(3)" ] || { \
+@[ -f "$(1)" ] || { \
 set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
-rm -f "$(1)" ;\
 GOBIN="$(LOCALBIN)" go install $${package} ;\
-mv "$(LOCALBIN)/$$(basename "$(1)")" "$(1)-$(3)" ;\
-} ;\
-ln -sf "$$(realpath "$(1)-$(3)")" "$(1)"
-endef
-
-define gomodver
-$(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
+mv "$(LOCALBIN)/$$(basename "$(2)")" "$(1)" ;\
+}
 endef
