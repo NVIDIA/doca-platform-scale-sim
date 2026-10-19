@@ -37,6 +37,9 @@ dist/
 # Rendered manifests and reports of make verify-manifests
 artifacts/
 
+# Scratch directories of the scenario contract tests
+/docs/scenarios/*/.test.*/
+
 # mock-dpuagent build output and its pinned DPF checkout
 /bin/mock-dpuagent
 /.cache/dpuagent/
