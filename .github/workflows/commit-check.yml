@@ -1,0 +1,30 @@
+name: Commit check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commit-check:
+    name: make commit-check
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the pull request head, not the merge commit GitHub creates,
+      # whose message conform would reject.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Validate the pull request commit messages
+        run: make commit-check CONFORM_FLAGS="--revision-range=${{ github.event.pull_request.base.sha }}..HEAD"
