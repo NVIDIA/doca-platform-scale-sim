@@ -22,7 +22,8 @@ repository on top of
 `/usr/share/doc/<package>/copyright` in the image.
 
 The manager binary statically links the Go modules listed in
-[Go modules in the controller](#go-modules-in-the-controller).
+[Go modules in the controller](#go-modules-in-the-controller), at the versions
+[`go.mod`](go.mod) requires.
 
 ## Guest image
 
@@ -46,7 +47,8 @@ the Linux kernel, glibc and systemd, keeps its license in
 Ubuntu archive and can be fetched with `apt-get source <package>`.
 
 The mock-dpuagent binary statically links the Go modules listed in
-[Go modules in mock-dpuagent](#go-modules-in-mock-dpuagent).
+[Go modules in mock-dpuagent](#go-modules-in-mock-dpuagent), at the versions
+doca-platform's `go.mod` requires at that commit.
 
 ## Build and test tools
 
@@ -58,222 +60,222 @@ the e2e suite. They are not redistributed.
 
 ## Go modules in the controller
 
-| Library | Version | License |
-| --- | --- | --- |
-| `cel.dev/expr` | v0.25.2 | Apache-2.0 |
-| `github.com/Mellanox/nic-configuration-operator/api/v1alpha1` | v1.3.2-0.20260910190108-c85d117b549f | Apache-2.0 |
-| `github.com/antlr4-go/antlr/v4` | v4.13.1 | BSD-3-Clause |
-| `github.com/beorn7/perks/quantile` | v1.0.1 | MIT |
-| `github.com/blang/semver/v4` | v4.0.0 | MIT |
-| `github.com/cenkalti/backoff/v5` | v5.0.3 | MIT |
-| `github.com/cespare/xxhash/v2` | v2.3.0 | MIT |
-| `github.com/davecgh/go-spew/spew` | v1.1.2-0.20180830191138-d8f796af33cc | ISC |
-| `github.com/emicklei/go-restful/v3` | v3.13.0 | MIT |
-| `github.com/evanphx/json-patch/v5` | v5.9.11 | BSD-3-Clause |
-| `github.com/felixge/httpsnoop` | v1.0.4 | MIT |
-| `github.com/fsnotify/fsnotify` | v1.9.0 | BSD-3-Clause |
-| `github.com/fxamacker/cbor/v2` | v2.9.0 | MIT |
-| `github.com/go-logr/logr` | v1.4.3 | Apache-2.0 |
-| `github.com/go-logr/stdr` | v1.2.2 | Apache-2.0 |
-| `github.com/go-logr/zapr` | v1.3.0 | Apache-2.0 |
-| `github.com/go-openapi/jsonpointer` | v0.21.2 | Apache-2.0 |
-| `github.com/go-openapi/jsonreference` | v0.21.0 | Apache-2.0 |
-| `github.com/go-openapi/swag` | v0.23.1 | Apache-2.0 |
-| `github.com/google/cel-go` | v0.26.0 | Apache-2.0 |
-| `github.com/google/cel-go` | v0.26.0 | BSD-3-Clause |
-| `github.com/google/gnostic-models` | v0.7.0 | Apache-2.0 |
-| `github.com/google/uuid` | v1.6.0 | BSD-3-Clause |
-| `github.com/grpc-ecosystem/grpc-gateway/v2` | v2.27.7 | BSD-3-Clause |
-| `github.com/josharian/intern` | v1.0.0 | MIT |
-| `github.com/json-iterator/go` | v1.1.12 | MIT |
-| `github.com/mailru/easyjson` | v0.9.0 | MIT |
-| `github.com/modern-go/concurrent` | v0.0.0-20180306012644-bacd9c7ef1dd | Apache-2.0 |
-| `github.com/modern-go/reflect2` | v1.0.3-0.20250322232337-35a7c28c31ee | Apache-2.0 |
-| `github.com/munnerz/goautoneg` | v0.0.0-20191010083416-a7dc8b61c822 | BSD-3-Clause |
-| `github.com/nvidia/doca-platform` | v0.1.0-latest-stable.0.20260930010043-71f47dec9e16 | Apache-2.0 |
-| `github.com/openshift/custom-resource-status/conditions/v1` | v1.1.2 | Apache-2.0 |
-| `github.com/pmezard/go-difflib/difflib` | v1.0.1-0.20181226105442-5d4384ee4fb2 | BSD-3-Clause |
-| `github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil` | v1.23.2 | BSD-3-Clause |
-| `github.com/prometheus/client_golang/prometheus` | v1.23.2 | Apache-2.0 |
-| `github.com/prometheus/client_model/go` | v0.6.2 | Apache-2.0 |
-| `github.com/prometheus/common` | v0.67.5 | Apache-2.0 |
-| `github.com/prometheus/procfs` | v0.19.2 | Apache-2.0 |
-| `github.com/spf13/cobra` | v1.10.2 | Apache-2.0 |
-| `github.com/spf13/pflag` | v1.0.10 | BSD-3-Clause |
-| `github.com/stoewer/go-strcase` | v1.3.0 | MIT |
-| `github.com/x448/float16` | v0.8.4 | MIT |
-| `go.opentelemetry.io/auto/sdk` | v1.2.1 | Apache-2.0 |
-| `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | v0.65.0 | Apache-2.0 |
-| `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | v0.65.0 | BSD-3-Clause |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | v1.40.0 | Apache-2.0 |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | v1.40.0 | BSD-3-Clause |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | v1.40.0 | Apache-2.0 |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | v1.40.0 | BSD-3-Clause |
-| `go.opentelemetry.io/otel/metric` | v1.44.0 | Apache-2.0 |
-| `go.opentelemetry.io/otel/metric` | v1.44.0 | BSD-3-Clause |
-| `go.opentelemetry.io/otel/sdk` | v1.44.0 | Apache-2.0 |
-| `go.opentelemetry.io/otel/sdk` | v1.44.0 | BSD-3-Clause |
-| `go.opentelemetry.io/otel/trace` | v1.44.0 | Apache-2.0 |
-| `go.opentelemetry.io/otel/trace` | v1.44.0 | BSD-3-Clause |
-| `go.opentelemetry.io/otel` | v1.44.0 | Apache-2.0 |
-| `go.opentelemetry.io/otel` | v1.44.0 | BSD-3-Clause |
-| `go.opentelemetry.io/proto/otlp` | v1.9.0 | Apache-2.0 |
-| `go.uber.org/multierr` | v1.11.0 | MIT |
-| `go.uber.org/zap` | v1.28.0 | MIT |
-| `go.yaml.in/yaml/v2` | v2.4.3 | Apache-2.0 |
-| `go.yaml.in/yaml/v3` | v3.0.4 | MIT |
-| `golang.org/x/exp/slices` | v0.0.0-20251219203646-944ab1f22d93 | BSD-3-Clause |
-| `golang.org/x/net` | v0.58.0 | BSD-3-Clause |
-| `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause |
-| `golang.org/x/sync` | v0.22.0 | BSD-3-Clause |
-| `golang.org/x/sys/unix` | v0.47.0 | BSD-3-Clause |
-| `golang.org/x/term` | v0.45.0 | BSD-3-Clause |
-| `golang.org/x/text` | v0.41.0 | BSD-3-Clause |
-| `golang.org/x/time/rate` | v0.14.0 | BSD-3-Clause |
-| `gomodules.xyz/jsonpatch/v2` | v2.4.0 | Apache-2.0 |
-| `google.golang.org/genproto/googleapis/api` | v0.0.0-20260526163538-3dc84a4a5aaa | Apache-2.0 |
-| `google.golang.org/genproto/googleapis/rpc` | v0.0.0-20260526163538-3dc84a4a5aaa | Apache-2.0 |
-| `google.golang.org/grpc` | v1.83.2 | Apache-2.0 |
-| `google.golang.org/protobuf` | v1.36.12-0.20260120151049-f2248ac996af | BSD-3-Clause |
-| `gopkg.in/evanphx/json-patch.v4` | v4.13.0 | BSD-3-Clause |
-| `gopkg.in/inf.v0` | v0.9.1 | BSD-3-Clause |
-| `gopkg.in/yaml.v3` | v3.0.1 | MIT |
-| `k8s.io/api` | v0.36.0 | Apache-2.0 |
-| `k8s.io/apiextensions-apiserver/pkg/apis/apiextensions` | v0.36.0 | Apache-2.0 |
-| `k8s.io/apimachinery/pkg` | v0.36.0 | Apache-2.0 |
-| `k8s.io/apimachinery/third_party/forked/golang` | v0.36.0 | BSD-3-Clause |
-| `k8s.io/apiserver` | v0.36.0 | Apache-2.0 |
-| `k8s.io/client-go` | v0.36.0 | Apache-2.0 |
-| `k8s.io/component-base` | v0.36.0 | Apache-2.0 |
-| `k8s.io/klog/v2` | v2.140.0 | Apache-2.0 |
-| `k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json` | v0.0.0-20260317180543-43fb72c5454a | BSD-3-Clause |
-| `k8s.io/kube-openapi/pkg/internal/third_party/govalidator` | v0.0.0-20260317180543-43fb72c5454a | MIT |
-| `k8s.io/kube-openapi/pkg/validation/errors` | v0.0.0-20260317180543-43fb72c5454a | Apache-2.0 |
-| `k8s.io/kube-openapi/pkg/validation/spec` | v0.0.0-20260317180543-43fb72c5454a | Apache-2.0 |
-| `k8s.io/kube-openapi/pkg/validation/strfmt` | v0.0.0-20260317180543-43fb72c5454a | Apache-2.0 |
-| `k8s.io/kube-openapi/pkg` | v0.0.0-20260317180543-43fb72c5454a | Apache-2.0 |
-| `k8s.io/streaming/pkg` | v0.36.0 | Apache-2.0 |
-| `k8s.io/utils/internal/third_party/forked/golang` | v0.0.0-20260319190234-28399d86e0b5 | BSD-3-Clause |
-| `k8s.io/utils/third_party/forked/golang/btree` | v0.0.0-20260319190234-28399d86e0b5 | Apache-2.0 |
-| `k8s.io/utils` | v0.0.0-20260319190234-28399d86e0b5 | Apache-2.0 |
-| `kubevirt.io/api` | v1.9.0 | Apache-2.0 |
-| `kubevirt.io/containerized-data-importer-api/pkg/apis/core` | v1.64.0 | Apache-2.0 |
-| `kubevirt.io/controller-lifecycle-operator-sdk/api` | v0.2.4 | Apache-2.0 |
-| `sigs.k8s.io/apiserver-network-proxy/konnectivity-client` | v0.34.0 | Apache-2.0 |
-| `sigs.k8s.io/controller-runtime` | v0.24.1 | Apache-2.0 |
-| `sigs.k8s.io/json` | v0.0.0-20250730193827-2d320260d730 | Apache-2.0 |
-| `sigs.k8s.io/json` | v0.0.0-20250730193827-2d320260d730 | BSD-3-Clause |
-| `sigs.k8s.io/randfill` | v1.0.0 | Apache-2.0 |
-| `sigs.k8s.io/structured-merge-diff/v6` | v6.3.2 | Apache-2.0 |
-| `sigs.k8s.io/yaml` | v1.6.0 | Apache-2.0 |
-| `sigs.k8s.io/yaml` | v1.6.0 | BSD-3-Clause |
-| `sigs.k8s.io/yaml` | v1.6.0 | MIT |
+| Library | License |
+| --- | --- |
+| `cel.dev/expr` | Apache-2.0 |
+| `github.com/Mellanox/nic-configuration-operator/api/v1alpha1` | Apache-2.0 |
+| `github.com/antlr4-go/antlr/v4` | BSD-3-Clause |
+| `github.com/beorn7/perks/quantile` | MIT |
+| `github.com/blang/semver/v4` | MIT |
+| `github.com/cenkalti/backoff/v5` | MIT |
+| `github.com/cespare/xxhash/v2` | MIT |
+| `github.com/davecgh/go-spew/spew` | ISC |
+| `github.com/emicklei/go-restful/v3` | MIT |
+| `github.com/evanphx/json-patch/v5` | BSD-3-Clause |
+| `github.com/felixge/httpsnoop` | MIT |
+| `github.com/fsnotify/fsnotify` | BSD-3-Clause |
+| `github.com/fxamacker/cbor/v2` | MIT |
+| `github.com/go-logr/logr` | Apache-2.0 |
+| `github.com/go-logr/stdr` | Apache-2.0 |
+| `github.com/go-logr/zapr` | Apache-2.0 |
+| `github.com/go-openapi/jsonpointer` | Apache-2.0 |
+| `github.com/go-openapi/jsonreference` | Apache-2.0 |
+| `github.com/go-openapi/swag` | Apache-2.0 |
+| `github.com/google/cel-go` | Apache-2.0 |
+| `github.com/google/cel-go` | BSD-3-Clause |
+| `github.com/google/gnostic-models` | Apache-2.0 |
+| `github.com/google/uuid` | BSD-3-Clause |
+| `github.com/grpc-ecosystem/grpc-gateway/v2` | BSD-3-Clause |
+| `github.com/josharian/intern` | MIT |
+| `github.com/json-iterator/go` | MIT |
+| `github.com/mailru/easyjson` | MIT |
+| `github.com/modern-go/concurrent` | Apache-2.0 |
+| `github.com/modern-go/reflect2` | Apache-2.0 |
+| `github.com/munnerz/goautoneg` | BSD-3-Clause |
+| `github.com/nvidia/doca-platform` | Apache-2.0 |
+| `github.com/openshift/custom-resource-status/conditions/v1` | Apache-2.0 |
+| `github.com/pmezard/go-difflib/difflib` | BSD-3-Clause |
+| `github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil` | BSD-3-Clause |
+| `github.com/prometheus/client_golang/prometheus` | Apache-2.0 |
+| `github.com/prometheus/client_model/go` | Apache-2.0 |
+| `github.com/prometheus/common` | Apache-2.0 |
+| `github.com/prometheus/procfs` | Apache-2.0 |
+| `github.com/spf13/cobra` | Apache-2.0 |
+| `github.com/spf13/pflag` | BSD-3-Clause |
+| `github.com/stoewer/go-strcase` | MIT |
+| `github.com/x448/float16` | MIT |
+| `go.opentelemetry.io/auto/sdk` | Apache-2.0 |
+| `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | Apache-2.0 |
+| `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | Apache-2.0 |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | Apache-2.0 |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/metric` | Apache-2.0 |
+| `go.opentelemetry.io/otel/metric` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/sdk` | Apache-2.0 |
+| `go.opentelemetry.io/otel/sdk` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/trace` | Apache-2.0 |
+| `go.opentelemetry.io/otel/trace` | BSD-3-Clause |
+| `go.opentelemetry.io/otel` | Apache-2.0 |
+| `go.opentelemetry.io/otel` | BSD-3-Clause |
+| `go.opentelemetry.io/proto/otlp` | Apache-2.0 |
+| `go.uber.org/multierr` | MIT |
+| `go.uber.org/zap` | MIT |
+| `go.yaml.in/yaml/v2` | Apache-2.0 |
+| `go.yaml.in/yaml/v3` | MIT |
+| `golang.org/x/exp/slices` | BSD-3-Clause |
+| `golang.org/x/net` | BSD-3-Clause |
+| `golang.org/x/oauth2` | BSD-3-Clause |
+| `golang.org/x/sync` | BSD-3-Clause |
+| `golang.org/x/sys/unix` | BSD-3-Clause |
+| `golang.org/x/term` | BSD-3-Clause |
+| `golang.org/x/text` | BSD-3-Clause |
+| `golang.org/x/time/rate` | BSD-3-Clause |
+| `gomodules.xyz/jsonpatch/v2` | Apache-2.0 |
+| `google.golang.org/genproto/googleapis/api` | Apache-2.0 |
+| `google.golang.org/genproto/googleapis/rpc` | Apache-2.0 |
+| `google.golang.org/grpc` | Apache-2.0 |
+| `google.golang.org/protobuf` | BSD-3-Clause |
+| `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause |
+| `gopkg.in/inf.v0` | BSD-3-Clause |
+| `gopkg.in/yaml.v3` | MIT |
+| `k8s.io/api` | Apache-2.0 |
+| `k8s.io/apiextensions-apiserver/pkg/apis/apiextensions` | Apache-2.0 |
+| `k8s.io/apimachinery/pkg` | Apache-2.0 |
+| `k8s.io/apimachinery/third_party/forked/golang` | BSD-3-Clause |
+| `k8s.io/apiserver` | Apache-2.0 |
+| `k8s.io/client-go` | Apache-2.0 |
+| `k8s.io/component-base` | Apache-2.0 |
+| `k8s.io/klog/v2` | Apache-2.0 |
+| `k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json` | BSD-3-Clause |
+| `k8s.io/kube-openapi/pkg/internal/third_party/govalidator` | MIT |
+| `k8s.io/kube-openapi/pkg/validation/errors` | Apache-2.0 |
+| `k8s.io/kube-openapi/pkg/validation/spec` | Apache-2.0 |
+| `k8s.io/kube-openapi/pkg/validation/strfmt` | Apache-2.0 |
+| `k8s.io/kube-openapi/pkg` | Apache-2.0 |
+| `k8s.io/streaming/pkg` | Apache-2.0 |
+| `k8s.io/utils/internal/third_party/forked/golang` | BSD-3-Clause |
+| `k8s.io/utils/third_party/forked/golang/btree` | Apache-2.0 |
+| `k8s.io/utils` | Apache-2.0 |
+| `kubevirt.io/api` | Apache-2.0 |
+| `kubevirt.io/containerized-data-importer-api/pkg/apis/core` | Apache-2.0 |
+| `kubevirt.io/controller-lifecycle-operator-sdk/api` | Apache-2.0 |
+| `sigs.k8s.io/apiserver-network-proxy/konnectivity-client` | Apache-2.0 |
+| `sigs.k8s.io/controller-runtime` | Apache-2.0 |
+| `sigs.k8s.io/json` | Apache-2.0 |
+| `sigs.k8s.io/json` | BSD-3-Clause |
+| `sigs.k8s.io/randfill` | Apache-2.0 |
+| `sigs.k8s.io/structured-merge-diff/v6` | Apache-2.0 |
+| `sigs.k8s.io/yaml` | Apache-2.0 |
+| `sigs.k8s.io/yaml` | BSD-3-Clause |
+| `sigs.k8s.io/yaml` | MIT |
 
 ## Go modules in mock-dpuagent
 
-| Library | Version | License |
-| --- | --- | --- |
-| `dario.cat/mergo` | v1.0.1 | BSD-3-Clause |
-| `github.com/Masterminds/goutils` | v1.1.1 | Apache-2.0 |
-| `github.com/Masterminds/semver/v3` | v3.4.0 | MIT |
-| `github.com/Masterminds/sprig/v3` | v3.3.0 | MIT |
-| `github.com/Mellanox/nic-configuration-operator/api/v1alpha1` | v1.3.2-0.20260910190108-c85d117b549f | Apache-2.0 |
-| `github.com/anchore/go-lzo` | v0.1.0 | MIT |
-| `github.com/beorn7/perks/quantile` | v1.0.1 | MIT |
-| `github.com/blang/semver/v4` | v4.0.0 | MIT |
-| `github.com/cespare/xxhash/v2` | v2.3.0 | MIT |
-| `github.com/davecgh/go-spew/spew` | v1.1.2-0.20180830191138-d8f796af33cc | ISC |
-| `github.com/diskfs/go-diskfs` | v1.9.3 | MIT |
-| `github.com/djherbis/times` | v1.6.0 | MIT |
-| `github.com/elliotwutingfeng/asciiset` | v0.0.0-20260129054604-cfde2086bc57 | BSD-3-Clause |
-| `github.com/emicklei/go-restful/v3` | v3.13.0 | MIT |
-| `github.com/evanphx/json-patch/v5` | v5.9.11 | BSD-3-Clause |
-| `github.com/fluxcd/pkg/apis/meta` | v1.9.0 | Apache-2.0 |
-| `github.com/fluxcd/pkg/runtime` | v0.52.0 | Apache-2.0 |
-| `github.com/fsnotify/fsnotify` | v1.9.0 | BSD-3-Clause |
-| `github.com/fxamacker/cbor/v2` | v2.9.0 | MIT |
-| `github.com/go-logr/logr` | v1.4.3 | Apache-2.0 |
-| `github.com/go-openapi/jsonpointer` | v0.21.2 | Apache-2.0 |
-| `github.com/go-openapi/jsonreference` | v0.21.0 | Apache-2.0 |
-| `github.com/go-openapi/swag` | v0.23.1 | Apache-2.0 |
-| `github.com/go-resty/resty/v2` | v2.16.3 | MIT |
-| `github.com/google/btree` | v1.1.3 | Apache-2.0 |
-| `github.com/google/gnostic-models` | v0.7.0 | Apache-2.0 |
-| `github.com/google/go-cmp/cmp` | v0.7.0 | BSD-3-Clause |
-| `github.com/google/uuid` | v1.6.0 | BSD-3-Clause |
-| `github.com/huandu/xstrings` | v1.5.0 | MIT |
-| `github.com/josharian/intern` | v1.0.0 | MIT |
-| `github.com/json-iterator/go` | v1.1.12 | MIT |
-| `github.com/klauspost/compress/internal/snapref` | v1.18.5 | BSD-3-Clause |
-| `github.com/klauspost/compress/zstd/internal/xxhash` | v1.18.5 | MIT |
-| `github.com/klauspost/compress` | v1.18.5 | Apache-2.0 |
-| `github.com/klauspost/compress` | v1.18.5 | BSD-3-Clause |
-| `github.com/klauspost/compress` | v1.18.5 | MIT |
-| `github.com/mailru/easyjson` | v0.9.0 | MIT |
-| `github.com/mitchellh/copystructure` | v1.2.0 | MIT |
-| `github.com/mitchellh/reflectwalk` | v1.0.2 | MIT |
-| `github.com/modern-go/concurrent` | v0.0.0-20180306012644-bacd9c7ef1dd | Apache-2.0 |
-| `github.com/modern-go/reflect2` | v1.0.3-0.20250322232337-35a7c28c31ee | Apache-2.0 |
-| `github.com/munnerz/goautoneg` | v0.0.0-20191010083416-a7dc8b61c822 | BSD-3-Clause |
-| `github.com/onsi/gomega` | v1.42.1 | MIT |
-| `github.com/opencontainers/go-digest` | v1.0.0 | Apache-2.0 |
-| `github.com/pierrec/lz4/v4` | v4.1.26 | BSD-3-Clause |
-| `github.com/pkg/errors` | v0.9.1 | BSD-2-Clause |
-| `github.com/pkg/xattr` | v0.4.12 | BSD-2-Clause |
-| `github.com/pmezard/go-difflib/difflib` | v1.0.1-0.20181226105442-5d4384ee4fb2 | BSD-3-Clause |
-| `github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil` | v1.23.2 | BSD-3-Clause |
-| `github.com/prometheus/client_golang/prometheus` | v1.23.2 | Apache-2.0 |
-| `github.com/prometheus/client_model/go` | v0.6.2 | Apache-2.0 |
-| `github.com/prometheus/common` | v0.66.1 | Apache-2.0 |
-| `github.com/prometheus/procfs` | v0.17.0 | Apache-2.0 |
-| `github.com/shopspring/decimal` | v1.4.0 | MIT |
-| `github.com/sirupsen/logrus` | v1.9.4 | MIT |
-| `github.com/spf13/cast` | v1.7.1 | MIT |
-| `github.com/spf13/cobra` | v1.10.0 | Apache-2.0 |
-| `github.com/spf13/pflag` | v1.0.9 | BSD-3-Clause |
-| `github.com/spiffe/go-spiffe/v2/spiffeid` | v2.8.1 | Apache-2.0 |
-| `github.com/ulikunitz/xz` | v0.5.15 | BSD-3-Clause |
-| `github.com/vishvananda/netlink` | v1.3.2-0.20251101063711-6e61cd407d1d | Apache-2.0 |
-| `github.com/vishvananda/netns` | v0.0.5 | Apache-2.0 |
-| `github.com/x448/float16` | v0.8.4 | MIT |
-| `go.opentelemetry.io/otel/trace` | v1.44.0 | Apache-2.0 |
-| `go.opentelemetry.io/otel/trace` | v1.44.0 | BSD-3-Clause |
-| `go.opentelemetry.io/otel` | v1.44.0 | Apache-2.0 |
-| `go.opentelemetry.io/otel` | v1.44.0 | BSD-3-Clause |
-| `go.yaml.in/yaml/v2` | v2.4.3 | Apache-2.0 |
-| `go.yaml.in/yaml/v3` | v3.0.4 | MIT |
-| `golang.org/x/crypto` | v0.56.0 | BSD-3-Clause |
-| `golang.org/x/net` | v0.58.0 | BSD-3-Clause |
-| `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause |
-| `golang.org/x/sync/errgroup` | v0.22.0 | BSD-3-Clause |
-| `golang.org/x/sys/unix` | v0.47.0 | BSD-3-Clause |
-| `golang.org/x/term` | v0.45.0 | BSD-3-Clause |
-| `golang.org/x/text` | v0.41.0 | BSD-3-Clause |
-| `golang.org/x/time/rate` | v0.12.0 | BSD-3-Clause |
-| `gomodules.xyz/jsonpatch/v2` | v2.4.0 | Apache-2.0 |
-| `google.golang.org/grpc` | v1.83.2 | Apache-2.0 |
-| `google.golang.org/protobuf` | v1.36.11 | BSD-3-Clause |
-| `gopkg.in/evanphx/json-patch.v4` | v4.13.0 | BSD-3-Clause |
-| `gopkg.in/inf.v0` | v0.9.1 | BSD-3-Clause |
-| `gopkg.in/yaml.v3` | v3.0.1 | MIT |
-| `k8s.io/api` | v0.35.4 | Apache-2.0 |
-| `k8s.io/apiextensions-apiserver/pkg/apis/apiextensions` | v0.35.4 | Apache-2.0 |
-| `k8s.io/apimachinery/pkg` | v0.35.4 | Apache-2.0 |
-| `k8s.io/apimachinery/third_party/forked/golang` | v0.35.4 | BSD-3-Clause |
-| `k8s.io/client-go` | v0.35.4 | Apache-2.0 |
-| `k8s.io/component-base` | v0.35.4 | Apache-2.0 |
-| `k8s.io/klog/v2` | v2.130.1 | Apache-2.0 |
-| `k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json` | v0.0.0-20250910181357-589584f1c912 | BSD-3-Clause |
-| `k8s.io/kube-openapi/pkg/validation/spec` | v0.0.0-20250910181357-589584f1c912 | Apache-2.0 |
-| `k8s.io/kube-openapi/pkg` | v0.0.0-20250910181357-589584f1c912 | Apache-2.0 |
-| `k8s.io/kubelet/config/v1beta1` | v0.31.4 | Apache-2.0 |
-| `k8s.io/utils/internal/third_party/forked/golang` | v0.0.0-20251002143259-bc988d571ff4 | BSD-3-Clause |
-| `k8s.io/utils` | v0.0.0-20251002143259-bc988d571ff4 | Apache-2.0 |
-| `sigs.k8s.io/controller-runtime` | v0.22.3 | Apache-2.0 |
-| `sigs.k8s.io/json` | v0.0.0-20250730193827-2d320260d730 | Apache-2.0 |
-| `sigs.k8s.io/json` | v0.0.0-20250730193827-2d320260d730 | BSD-3-Clause |
-| `sigs.k8s.io/randfill` | v1.0.0 | Apache-2.0 |
-| `sigs.k8s.io/structured-merge-diff/v6` | v6.3.0 | Apache-2.0 |
-| `sigs.k8s.io/yaml` | v1.6.0 | Apache-2.0 |
-| `sigs.k8s.io/yaml` | v1.6.0 | BSD-3-Clause |
-| `sigs.k8s.io/yaml` | v1.6.0 | MIT |
+| Library | License |
+| --- | --- |
+| `dario.cat/mergo` | BSD-3-Clause |
+| `github.com/Masterminds/goutils` | Apache-2.0 |
+| `github.com/Masterminds/semver/v3` | MIT |
+| `github.com/Masterminds/sprig/v3` | MIT |
+| `github.com/Mellanox/nic-configuration-operator/api/v1alpha1` | Apache-2.0 |
+| `github.com/anchore/go-lzo` | MIT |
+| `github.com/beorn7/perks/quantile` | MIT |
+| `github.com/blang/semver/v4` | MIT |
+| `github.com/cespare/xxhash/v2` | MIT |
+| `github.com/davecgh/go-spew/spew` | ISC |
+| `github.com/diskfs/go-diskfs` | MIT |
+| `github.com/djherbis/times` | MIT |
+| `github.com/elliotwutingfeng/asciiset` | BSD-3-Clause |
+| `github.com/emicklei/go-restful/v3` | MIT |
+| `github.com/evanphx/json-patch/v5` | BSD-3-Clause |
+| `github.com/fluxcd/pkg/apis/meta` | Apache-2.0 |
+| `github.com/fluxcd/pkg/runtime` | Apache-2.0 |
+| `github.com/fsnotify/fsnotify` | BSD-3-Clause |
+| `github.com/fxamacker/cbor/v2` | MIT |
+| `github.com/go-logr/logr` | Apache-2.0 |
+| `github.com/go-openapi/jsonpointer` | Apache-2.0 |
+| `github.com/go-openapi/jsonreference` | Apache-2.0 |
+| `github.com/go-openapi/swag` | Apache-2.0 |
+| `github.com/go-resty/resty/v2` | MIT |
+| `github.com/google/btree` | Apache-2.0 |
+| `github.com/google/gnostic-models` | Apache-2.0 |
+| `github.com/google/go-cmp/cmp` | BSD-3-Clause |
+| `github.com/google/uuid` | BSD-3-Clause |
+| `github.com/huandu/xstrings` | MIT |
+| `github.com/josharian/intern` | MIT |
+| `github.com/json-iterator/go` | MIT |
+| `github.com/klauspost/compress/internal/snapref` | BSD-3-Clause |
+| `github.com/klauspost/compress/zstd/internal/xxhash` | MIT |
+| `github.com/klauspost/compress` | Apache-2.0 |
+| `github.com/klauspost/compress` | BSD-3-Clause |
+| `github.com/klauspost/compress` | MIT |
+| `github.com/mailru/easyjson` | MIT |
+| `github.com/mitchellh/copystructure` | MIT |
+| `github.com/mitchellh/reflectwalk` | MIT |
+| `github.com/modern-go/concurrent` | Apache-2.0 |
+| `github.com/modern-go/reflect2` | Apache-2.0 |
+| `github.com/munnerz/goautoneg` | BSD-3-Clause |
+| `github.com/onsi/gomega` | MIT |
+| `github.com/opencontainers/go-digest` | Apache-2.0 |
+| `github.com/pierrec/lz4/v4` | BSD-3-Clause |
+| `github.com/pkg/errors` | BSD-2-Clause |
+| `github.com/pkg/xattr` | BSD-2-Clause |
+| `github.com/pmezard/go-difflib/difflib` | BSD-3-Clause |
+| `github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil` | BSD-3-Clause |
+| `github.com/prometheus/client_golang/prometheus` | Apache-2.0 |
+| `github.com/prometheus/client_model/go` | Apache-2.0 |
+| `github.com/prometheus/common` | Apache-2.0 |
+| `github.com/prometheus/procfs` | Apache-2.0 |
+| `github.com/shopspring/decimal` | MIT |
+| `github.com/sirupsen/logrus` | MIT |
+| `github.com/spf13/cast` | MIT |
+| `github.com/spf13/cobra` | Apache-2.0 |
+| `github.com/spf13/pflag` | BSD-3-Clause |
+| `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 |
+| `github.com/ulikunitz/xz` | BSD-3-Clause |
+| `github.com/vishvananda/netlink` | Apache-2.0 |
+| `github.com/vishvananda/netns` | Apache-2.0 |
+| `github.com/x448/float16` | MIT |
+| `go.opentelemetry.io/otel/trace` | Apache-2.0 |
+| `go.opentelemetry.io/otel/trace` | BSD-3-Clause |
+| `go.opentelemetry.io/otel` | Apache-2.0 |
+| `go.opentelemetry.io/otel` | BSD-3-Clause |
+| `go.yaml.in/yaml/v2` | Apache-2.0 |
+| `go.yaml.in/yaml/v3` | MIT |
+| `golang.org/x/crypto` | BSD-3-Clause |
+| `golang.org/x/net` | BSD-3-Clause |
+| `golang.org/x/oauth2` | BSD-3-Clause |
+| `golang.org/x/sync/errgroup` | BSD-3-Clause |
+| `golang.org/x/sys/unix` | BSD-3-Clause |
+| `golang.org/x/term` | BSD-3-Clause |
+| `golang.org/x/text` | BSD-3-Clause |
+| `golang.org/x/time/rate` | BSD-3-Clause |
+| `gomodules.xyz/jsonpatch/v2` | Apache-2.0 |
+| `google.golang.org/grpc` | Apache-2.0 |
+| `google.golang.org/protobuf` | BSD-3-Clause |
+| `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause |
+| `gopkg.in/inf.v0` | BSD-3-Clause |
+| `gopkg.in/yaml.v3` | MIT |
+| `k8s.io/api` | Apache-2.0 |
+| `k8s.io/apiextensions-apiserver/pkg/apis/apiextensions` | Apache-2.0 |
+| `k8s.io/apimachinery/pkg` | Apache-2.0 |
+| `k8s.io/apimachinery/third_party/forked/golang` | BSD-3-Clause |
+| `k8s.io/client-go` | Apache-2.0 |
+| `k8s.io/component-base` | Apache-2.0 |
+| `k8s.io/klog/v2` | Apache-2.0 |
+| `k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json` | BSD-3-Clause |
+| `k8s.io/kube-openapi/pkg/validation/spec` | Apache-2.0 |
+| `k8s.io/kube-openapi/pkg` | Apache-2.0 |
+| `k8s.io/kubelet/config/v1beta1` | Apache-2.0 |
+| `k8s.io/utils/internal/third_party/forked/golang` | BSD-3-Clause |
+| `k8s.io/utils` | Apache-2.0 |
+| `sigs.k8s.io/controller-runtime` | Apache-2.0 |
+| `sigs.k8s.io/json` | Apache-2.0 |
+| `sigs.k8s.io/json` | BSD-3-Clause |
+| `sigs.k8s.io/randfill` | Apache-2.0 |
+| `sigs.k8s.io/structured-merge-diff/v6` | Apache-2.0 |
+| `sigs.k8s.io/yaml` | Apache-2.0 |
+| `sigs.k8s.io/yaml` | BSD-3-Clause |
+| `sigs.k8s.io/yaml` | MIT |

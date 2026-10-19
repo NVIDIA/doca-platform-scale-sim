@@ -1,3 +1,3 @@
 {{ range . -}}
-| `{{ .Name }}` | {{ .Version }} | {{ .LicenseName }} |
+| `{{ .Name }}` | {{ .LicenseName }} |
 {{ end -}}

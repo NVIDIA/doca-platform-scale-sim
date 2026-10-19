@@ -16,7 +16,9 @@
 
 # Rewrite the Go module tables at the end of THIRD_PARTY_NOTICES.md from the
 # modules linked into the controller and into mock-dpuagent. Everything above
-# the marker line is maintained by hand and kept as is.
+# the marker line is maintained by hand and kept as is. The tables leave out
+# versions, which go.mod records, so a version bump only needs a regeneration
+# when it adds or drops a library or changes a license.
 
 set -euo pipefail
 
@@ -56,7 +58,7 @@ report() {
 
 table() {
 	printf '\n## %s\n\n' "$1"
-	printf '| Library | Version | License |\n| --- | --- | --- |\n'
+	printf '| Library | License |\n| --- | --- |\n'
 	report "$2" "$3" "$4"
 }
 
