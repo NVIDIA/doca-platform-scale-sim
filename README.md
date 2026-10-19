@@ -46,6 +46,10 @@ helm install simfleet-controller dist/simfleet-controller-0.1.0.tgz \
 
 See the [chart README](charts/simfleet-controller/README.md) for every value.
 
+To run a fleet of simulated DPUs against a real DPF cluster, start with the
+[scale scenarios guide](docs/scenarios/README.md), then follow a scenario
+such as [zero-trust passthrough](docs/scenarios/zero-trust-passthrough/README.md).
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
