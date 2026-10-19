@@ -13,6 +13,9 @@ concurrency:
 jobs:
   commit-check:
     name: make commit-check
+    # Dependabot cannot sign off its commits, so the DCO policy would reject
+    # every one of its pull requests.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       # Check out the pull request head, not the merge commit GitHub creates,
