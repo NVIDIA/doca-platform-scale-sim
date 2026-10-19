@@ -71,6 +71,10 @@ generate: controller-gen ## Generate DeepCopy, DeepCopyInto, and DeepCopyObject 
 generate-modules: ## Run go mod tidy to update go modules.
 	go mod tidy
 
+.PHONY: generate-third-party-notices
+generate-third-party-notices: go-licenses ## Regenerate the Go module licenses in THIRD_PARTY_NOTICES.md.
+	GO_LICENSES="$(GO_LICENSES)" ./hack/third-party-notices.sh
+
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	go fmt ./...
@@ -243,10 +247,10 @@ VERIFY_TARGETS ?= generate copyright shfmt manifests
 verify: $(addprefix verify-,$(VERIFY_TARGETS)) ## Run all verify-* targets
 
 .PHONY: verify-generate
-verify-generate: manifests generate generate-modules fmt generate-docs-helm ## Verify auto-generated code, modules and docs did not change
+verify-generate: manifests generate generate-modules fmt generate-docs-helm generate-third-party-notices ## Verify auto-generated code, modules and docs did not change
 	# Use intent-to-add to check for untracked files after generation.
 	git add -N .
-	@git diff --quiet || { git diff --stat; echo "Please, commit the result of 'make manifests generate generate-modules fmt generate-docs-helm'"; exit 1; }
+	@git diff --quiet || { git diff --stat; echo "Please, commit the result of 'make manifests generate generate-modules fmt generate-docs-helm generate-third-party-notices'"; exit 1; }
 
 # Tracked and untracked files, so a new file is checked before it is committed.
 SOURCE_FILES = git ls-files --cached --others --exclude-standard --
@@ -441,6 +445,7 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 HELM_DOCS ?= $(LOCALBIN)/helm-docs-$(HELM_DOCS_VERSION)
 SHFMT ?= $(LOCALBIN)/shfmt-$(SHFMT_VERSION)
 CONFORM ?= $(LOCALBIN)/conform-$(CONFORM_VERSION)
+GO_LICENSES ?= $(LOCALBIN)/go-licenses-$(GO_LICENSES_VERSION)
 
 TOOL_OS ?= $(shell uname -s | tr A-Z a-z)
 TOOL_ARCH ?= $(shell uname -m)
@@ -462,6 +467,7 @@ HELM_GIT_VERSION ?= 1.4.0
 HELM_DOCS_VERSION ?= v1.14.2
 SHFMT_VERSION ?= v3.11.0
 CONFORM_VERSION ?= v0.1.0-alpha.30
+GO_LICENSES_VERSION ?= v2.0.1
 
 # Defined before its first use: ENVTEST names a rule target, and make expands
 # rule targets while it parses.
@@ -531,6 +537,15 @@ $(SHFMT): | $(LOCALBIN)
 conform: $(CONFORM) ## Download conform locally if necessary.
 $(CONFORM): | $(LOCALBIN)
 	$(call go-install-tool,$(CONFORM),github.com/siderolabs/conform/cmd/conform,$(CONFORM_VERSION))
+
+.PHONY: go-licenses
+go-licenses: $(GO_LICENSES) ## Download go-licenses locally if necessary.
+# Not go-install-tool: the module path ends in /v2, which is not the binary's
+# name. Built with the local toolchain because hack/third-party-notices.sh
+# scans with it, and go-licenses only recognizes its own GOROOT's packages.
+$(GO_LICENSES): | $(LOCALBIN)
+	GOTOOLCHAIN=local GOBIN="$(LOCALBIN)" go install github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION)
+	mv "$(LOCALBIN)/go-licenses" "$(GO_LICENSES)"
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.

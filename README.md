@@ -250,4 +250,6 @@ Report bugs and ask questions in
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists the third-party
+software in this repository and in the images it builds.

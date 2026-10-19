@@ -1,0 +1,17 @@
+DOCA Platform Scale Sim
+Copyright 2026 NVIDIA.
+
+This product is licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product includes software from the KubeVirt project
+(https://github.com/kubevirt/kubevirt), licensed under the Apache License,
+Version 2.0: the VirtualMachine and VirtualMachineInstance
+CustomResourceDefinitions in config/kubevirt-crds/, from KubeVirt v1.9.0.
+
+This product includes software from the flannel project
+(https://github.com/flannel-io/flannel), licensed under the Apache License,
+Version 2.0: images/simfleet-node/guest/10-flannel.conflist is kube-flannel's
+default CNI configuration.
+
+The container images built from this repository contain further third-party
+software. See THIRD_PARTY_NOTICES.md.
