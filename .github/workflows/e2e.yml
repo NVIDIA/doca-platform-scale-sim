@@ -43,8 +43,8 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           # mock-dpuagent brings its own module graph and toolchain. Keying on
@@ -69,7 +69,7 @@ jobs:
           echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
       - name: Restore the node image
         id: node-image-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/simfleet-node.tar
           key: simfleet-node-${{ steps.node-image.outputs.hash }}
@@ -91,7 +91,7 @@ jobs:
         run: docker save -o "${RUNNER_TEMP}/simfleet-node.tar" simfleet-node:e2e
       - name: Save the node image
         if: steps.node-image-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/simfleet-node.tar
           key: ${{ steps.node-image-cache.outputs.cache-primary-key }}
