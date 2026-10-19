@@ -20,6 +20,9 @@ pass, before they can be merged.
 Commit subjects follow [Conventional Commits](https://www.conventionalcommits.org/):
 `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `build` or `ci`, then a short
 imperative summary, for example `fix: requeue SimInstance when the VM is not ready`.
+Subjects are lowercase and at most 72 characters, every commit needs a body and
+a sign-off, and `make commit-check` validates the HEAD commit against
+`.conform.yaml`. Pull requests run the same check on each of their commits.
 
 ## Sign your work
 
