@@ -43,3 +43,6 @@ artifacts/
 # mock-dpuagent build output and its pinned DPF checkout
 /bin/mock-dpuagent
 /.cache/dpuagent/
+
+# Local planning notes
+docs/superpowers/
