@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 180
     env:
       KUBECTL_VERSION: v1.36.4
+      KIND_CLUSTER: simfleet-controller-test-e2e
     steps:
       # Kind, DPF, KubeVirt and the containerDisk build do not fit in the
       # runner's default free space. The containerd image store keeps each
@@ -106,7 +107,7 @@ jobs:
         run: |
           df -h / || true
           docker system df || true
-          docker exec simfleet-controller-test-e2e-control-plane df -h /var/lib/containerd || true
+          docker exec "${KIND_CLUSTER}-control-plane" df -h /var/lib/containerd || true
           kubectl get pods -A -o wide || true
           kubectl get simfleets,siminstances,vm,vmi -A || true
           kubectl get dpus,dpudevices,dpunodes -A || true
