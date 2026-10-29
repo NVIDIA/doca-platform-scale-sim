@@ -26,13 +26,20 @@ jobs:
     timeout-minutes: 180
     env:
       KUBECTL_VERSION: v1.36.4
+      KIND_CLUSTER: simfleet-controller-test-e2e
     steps:
       # Kind, DPF, KubeVirt and the containerDisk build do not fit in the
-      # runner's default free space.
+      # runner's default free space. The containerd image store keeps each
+      # image both compressed and unpacked, which roughly doubles the cost of
+      # the node image, so clear every large toolchain the suite does not use.
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup /usr/share/swift /usr/local/share/boost /usr/local/share/powershell \
+            /usr/local/share/chromium /usr/local/lib/node_modules /usr/lib/jvm /opt/microsoft \
+            /opt/google /opt/az /opt/pipx /usr/local/julia* /opt/hostedtoolcache/PyPy \
+            /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/node /opt/hostedtoolcache/Java*
+          sudo docker system prune --all --force
           df -h /
       # KubeVirt and the libguestfs appliance both use /dev/kvm when the
       # runner user can open it.
@@ -43,8 +50,8 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           # mock-dpuagent brings its own module graph and toolchain. Keying on
@@ -69,7 +76,7 @@ jobs:
           echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
       - name: Restore the node image
         id: node-image-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/simfleet-node.tar
           key: simfleet-node-${{ steps.node-image.outputs.hash }}
@@ -91,13 +98,16 @@ jobs:
         run: docker save -o "${RUNNER_TEMP}/simfleet-node.tar" simfleet-node:e2e
       - name: Save the node image
         if: steps.node-image-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/simfleet-node.tar
           key: ${{ steps.node-image-cache.outputs.cache-primary-key }}
       - name: Cluster state on failure
         if: failure()
         run: |
+          df -h / || true
+          docker system df || true
+          docker exec "${KIND_CLUSTER}-control-plane" df -h /var/lib/containerd || true
           kubectl get pods -A -o wide || true
           kubectl get simfleets,siminstances,vm,vmi -A || true
           kubectl get dpus,dpudevices,dpunodes -A || true
