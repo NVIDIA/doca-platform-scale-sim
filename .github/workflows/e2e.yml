@@ -38,8 +38,7 @@ jobs:
             /usr/local/share/chromium /usr/local/lib/node_modules /usr/lib/jvm /opt/microsoft \
             /opt/google /opt/az /opt/pipx /usr/local/julia* /opt/hostedtoolcache/PyPy \
             /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/node /opt/hostedtoolcache/Java*
-          sudo docker image prune --all --force
-          sudo docker builder prune --all --force
+          sudo docker system prune --all --force
           df -h /
       # KubeVirt and the libguestfs appliance both use /dev/kvm when the
       # runner user can open it.
