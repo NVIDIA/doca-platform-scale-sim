@@ -29,8 +29,7 @@ readonly NAME="bfb-fixtures"
 FIXTURE_FILE="${BFB_FIXTURE_FILE:?BFB_FIXTURE_FILE must point at the trimmed BFB}"
 MANIFEST="${BFB_FIXTURES_MANIFEST:?BFB_FIXTURES_MANIFEST must point at bfb-fixtures.yaml}"
 # Pinned by digest in the Makefile. The Kind node never resolves it: the host
-# daemon pulls it once and `kind load` puts it in the node's image store, the
-# same way the controller and guest images get there.
+# daemon pulls it once and `kind load` puts it in the node's image store.
 SOURCE_IMAGE="${BFB_FIXTURES_SOURCE_IMAGE:?BFB_FIXTURES_SOURCE_IMAGE must be set}"
 IMAGE="${BFB_FIXTURES_IMAGE:-simfleet-e2e/bfb-fixtures:busybox}"
 
@@ -42,7 +41,15 @@ fi
 echo "Loading the BFB fixture server image ${SOURCE_IMAGE} as ${IMAGE}..."
 docker pull "${SOURCE_IMAGE}"
 docker tag "${SOURCE_IMAGE}" "${IMAGE}"
-"${KIND_BIN}" load docker-image "${IMAGE}" --name "${KIND_CLUSTER}"
+# SOURCE_IMAGE is a multi-platform index. With the containerd image store, the
+# daemon keeps the whole index but only the layers of its own platform, and
+# `kind load docker-image` imports with --all-platforms, which fails on the
+# first missing blob. Save just the platform the Kind node runs instead.
+PLATFORM="$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')"
+ARCHIVE_DIR="$(mktemp -d)"
+trap 'rm -rf "${ARCHIVE_DIR}"' EXIT
+docker save --platform "${PLATFORM}" --output "${ARCHIVE_DIR}/image.tar" "${IMAGE}"
+"${KIND_BIN}" load image-archive "${ARCHIVE_DIR}/image.tar" --name "${KIND_CLUSTER}"
 
 # The suite applies testdata/ into dpf-operator-system, which DPF already
 # created. The BFB object it creates there is downloaded within seconds, so
