@@ -115,7 +115,8 @@ The `simfleet-node` image bakes `/opt/dpf/mock-dpuagent` (Redfish on **443**
 and **80**, plus a fake DPU agent). SimFleet cloud-init writes
 `/etc/mock-dpuagent/config.yaml` and a per-ordinal management kubeconfig; a
 guest `wait-kubelet-join` helper turns DPF's join Secret into kubelet config
-once the DPU exists. The mock service is **not** ordered after the join helper
+once the mock agent has finished Configure Kubelet in `DPU Cluster Config`.
+The mock service is **not** ordered after the join helper
 — DPF cannot create the join Secret until Redfish has already succeeded on the
 guest BMC address.
 

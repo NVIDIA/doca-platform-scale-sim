@@ -117,8 +117,11 @@ Both guest units are enabled under **`cloud-init.target`**, not
 finishes. They are deliberately **not ordered against each other**: DPF cannot
 create the join Secret until Redfish has already succeeded on the guest BMC, so
 making the mock wait on the join helper would deadlock provisioning. The helper
-waits for DPF to publish the DPU and its join Secret, runs `kubeadm join` as a
-validated argument vector, and **leaves kubelet running** afterwards so the
+waits for DPF to publish the DPU and its join Secret, then for the DPU to be in
+`DPU Cluster Config` with the mock's `KubeletConfigured=True`, so the tenant
+Node registers in the phase where a real agent registers it. It then runs
+`kubeadm join` as a validated argument vector, and **leaves kubelet running**
+afterwards so the
 mock's one-shot Start Kubelet step cannot race an already-stopped unit.
 
 ### Both units are vendor units, so that they can be masked

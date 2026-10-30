@@ -438,7 +438,8 @@ var _ = Describe("SimFleet", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to build the tenant client")
 		Eventually(func(g Gomega) {
 			for ordinal := range replicas {
-				expectDPUAgentJoined(g, tenant, fleetDPUName(ordinal))
+				dpu, node := expectDPUAgentJoined(g, tenant, fleetDPUName(ordinal))
+				expectNodeJoinedInConfigureKubelet(g, dpu, node)
 			}
 		}, dpuProvisioningTimeout(), 5*time.Second).Should(Succeed())
 

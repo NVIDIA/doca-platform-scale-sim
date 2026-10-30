@@ -454,6 +454,18 @@ func expectDPUAgentJoined(g Gomega, tenant client.Client, dpuName string) (*prov
 	return dpu, node
 }
 
+// expectNodeJoinedInConfigureKubelet fails when the tenant Node was created
+// before the agent finished Configure Kubelet, which is when a real DPU joins.
+// A guest that joined earlier makes the controller see DPU Cluster Config as
+// already done, so the phase delays up to it would gate nothing.
+func expectNodeJoinedInConfigureKubelet(g Gomega, dpu *provisioningv1.DPU, node *corev1.Node) {
+	configured := meta.FindStatusCondition(dpu.Status.AgentStatus.Conditions, kubeletConfiguredCondition)
+	g.Expect(configured).NotTo(BeNil(), "%s has no %s condition", dpu.Name, kubeletConfiguredCondition)
+	g.Expect(node.CreationTimestamp.Before(&configured.LastTransitionTime)).To(BeFalse(),
+		"tenant Node %s was created at %s, before %s became True at %s",
+		node.Name, node.CreationTimestamp, kubeletConfiguredCondition, configured.LastTransitionTime)
+}
+
 // expectDPUAgentRejoined is expectDPUAgentJoined for a DPU whose guest was
 // replaced. The replacement keeps the DPU and Node names, and the old tenant
 // Node can outlive the old guest, so a joined check alone can pass on it.

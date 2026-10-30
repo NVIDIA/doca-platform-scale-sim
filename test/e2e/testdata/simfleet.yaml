@@ -15,12 +15,16 @@ spec:
   # Explicit so the guest path cannot silently fall back to agent-disabled
   # identity-only cloud-init if CRD defaulting is skipped.
   dpuAgent:
-    # Both phases occur on the suite's BF3 NoAction path. Kept short: every
-    # provisioning pays them, and the suite timeout has little slack.
+    # Every phase here occurs on the suite's BF3 NoAction path. Kept short:
+    # every provisioning pays them, and the suite timeout has little slack.
+    # DPU Cluster Config is the phase the guest's kubelet join is gated on.
     phaseDelays:
     - phase: OS Installing
       minSeconds: 8
       maxSeconds: 12
+    - phase: DPU Cluster Config
+      minSeconds: 2
+      maxSeconds: 2
     - phase: Service Readiness
       minSeconds: 2
       maxSeconds: 2
