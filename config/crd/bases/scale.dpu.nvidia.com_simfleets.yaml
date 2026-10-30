@@ -287,6 +287,50 @@ spec:
                   enabled:
                     default: true
                     type: boolean
+                  phaseDelays:
+                    description: |-
+                      Extra time the mock spends in the steps it controls while the DPU is in
+                      a phase; see the mock-dpuagent "Phase delays" section. The range applies
+                      on every pass through the phase. OS Installing counts against DPF's
+                      --os-install-timeout.
+                    items:
+                      description: |-
+                        DPUAgentPhaseDelay is a closed range of whole seconds the mock adds to one
+                        DPU phase.
+                      properties:
+                        maxSeconds:
+                          format: int32
+                          maximum: 3600
+                          minimum: 0
+                          type: integer
+                        minSeconds:
+                          format: int32
+                          maximum: 3600
+                          minimum: 0
+                          type: integer
+                        phase:
+                          description: DPU phase as shown in DPU.status.phase, see
+                            MockDelayablePhases.
+                          enum:
+                          - Update Firmware
+                          - OS Installing
+                          - Rebooting
+                          - DPU Config
+                          - DPU Cluster Config
+                          - Service Readiness
+                          type: string
+                      required:
+                      - maxSeconds
+                      - minSeconds
+                      - phase
+                      type: object
+                      x-kubernetes-validations:
+                      - message: minSeconds must not exceed maxSeconds
+                        rule: self.minSeconds <= self.maxSeconds
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - phase
+                    x-kubernetes-list-type: map
                   rebootMethod:
                     default: NoAction
                     description: Comma-separated mock reboot methods. Kind e2e uses

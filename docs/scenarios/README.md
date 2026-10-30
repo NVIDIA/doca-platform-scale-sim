@@ -144,6 +144,29 @@ Operation names are those of the pinned mock's Redfish route table; see the
 "Redfish response delays" section of the mock-dpuagent README at
 `hack/dpuagent/mock.ref`.
 
+Response delays only hold back the HTTP reply. To make the DPU itself spend
+realistic time in a phase, such as the OS install or a reboot, set phase delays:
+
+```yaml
+spec:
+  dpuAgent:
+    phaseDelays:
+      - phase: OS Installing
+        minSeconds: 600
+        maxSeconds: 900
+      - phase: Rebooting
+        minSeconds: 120
+        maxSeconds: 240
+```
+
+Phases are named as in `DPU.status.phase`: Update Firmware, OS Installing,
+Rebooting, DPU Config, DPU Cluster Config and Service Readiness. The range
+applies on every pass through the phase; a DPU only goes through Rebooting when
+`rebootMethod` names a method other than NoAction. OS Installing counts against DPF's
+`--os-install-timeout`. The "Phase delays" section of the same README says how
+each range is split over the mock's steps and where some of it lands in the
+next phase.
+
 ## SimFleet readiness
 
 SimFleet should report `InventoryReady`, `DPUsObserved`, `BootstrapReady`,

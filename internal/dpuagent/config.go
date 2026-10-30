@@ -44,9 +44,16 @@ const (
 )
 
 type mockDPUAgentConfig struct {
-	DPUType string            `json:"dpuType"`
-	BMC     mockDPUAgentBMC   `json:"bmc"`
-	Agent   mockDPUAgentAgent `json:"agent"`
+	DPUType     string                   `json:"dpuType"`
+	BMC         mockDPUAgentBMC          `json:"bmc"`
+	Agent       mockDPUAgentAgent        `json:"agent"`
+	PhaseDelays []mockDPUAgentPhaseDelay `json:"phaseDelays,omitempty"`
+}
+
+type mockDPUAgentPhaseDelay struct {
+	Phase      string `json:"phase"`
+	MinSeconds int    `json:"minSeconds"`
+	MaxSeconds int    `json:"maxSeconds"`
 }
 
 type mockDPUAgentBMC struct {
@@ -115,6 +122,13 @@ func RenderConfig(fleet *scalev1alpha1.SimFleet, serial string) (string, error) 
 			RebootMethod:   *spec.RebootMethod,
 			DPUClusterJoin: "kubelet",
 		},
+	}
+	for _, d := range spec.PhaseDelays {
+		config.PhaseDelays = append(config.PhaseDelays, mockDPUAgentPhaseDelay{
+			Phase:      d.Phase,
+			MinSeconds: int(d.MinSeconds),
+			MaxSeconds: int(d.MaxSeconds),
+		})
 	}
 
 	rendered, err := yaml.Marshal(config)

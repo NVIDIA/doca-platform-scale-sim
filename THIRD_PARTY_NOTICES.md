@@ -183,6 +183,7 @@ the e2e suite. They are not redistributed.
 | `github.com/anchore/go-lzo` | MIT |
 | `github.com/beorn7/perks/quantile` | MIT |
 | `github.com/blang/semver/v4` | MIT |
+| `github.com/cenkalti/backoff/v5` | MIT |
 | `github.com/cespare/xxhash/v2` | MIT |
 | `github.com/davecgh/go-spew/spew` | ISC |
 | `github.com/diskfs/go-diskfs` | MIT |
@@ -195,6 +196,7 @@ the e2e suite. They are not redistributed.
 | `github.com/fsnotify/fsnotify` | BSD-3-Clause |
 | `github.com/fxamacker/cbor/v2` | MIT |
 | `github.com/go-logr/logr` | Apache-2.0 |
+| `github.com/go-logr/stdr` | Apache-2.0 |
 | `github.com/go-openapi/jsonpointer` | Apache-2.0 |
 | `github.com/go-openapi/jsonreference` | Apache-2.0 |
 | `github.com/go-openapi/swag` | Apache-2.0 |
@@ -203,6 +205,7 @@ the e2e suite. They are not redistributed.
 | `github.com/google/gnostic-models` | Apache-2.0 |
 | `github.com/google/go-cmp/cmp` | BSD-3-Clause |
 | `github.com/google/uuid` | BSD-3-Clause |
+| `github.com/grpc-ecosystem/grpc-gateway/v2` | BSD-3-Clause |
 | `github.com/huandu/xstrings` | MIT |
 | `github.com/josharian/intern` | MIT |
 | `github.com/json-iterator/go` | MIT |
@@ -238,10 +241,22 @@ the e2e suite. They are not redistributed.
 | `github.com/vishvananda/netlink` | Apache-2.0 |
 | `github.com/vishvananda/netns` | Apache-2.0 |
 | `github.com/x448/float16` | MIT |
+| `go.opentelemetry.io/auto/sdk` | Apache-2.0 |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | Apache-2.0 |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` | Apache-2.0 |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | Apache-2.0 |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/metric` | Apache-2.0 |
+| `go.opentelemetry.io/otel/metric` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/sdk` | Apache-2.0 |
+| `go.opentelemetry.io/otel/sdk` | BSD-3-Clause |
 | `go.opentelemetry.io/otel/trace` | Apache-2.0 |
 | `go.opentelemetry.io/otel/trace` | BSD-3-Clause |
 | `go.opentelemetry.io/otel` | Apache-2.0 |
 | `go.opentelemetry.io/otel` | BSD-3-Clause |
+| `go.opentelemetry.io/proto/otlp` | Apache-2.0 |
 | `go.yaml.in/yaml/v2` | Apache-2.0 |
 | `go.yaml.in/yaml/v3` | MIT |
 | `golang.org/x/crypto` | BSD-3-Clause |
@@ -253,6 +268,8 @@ the e2e suite. They are not redistributed.
 | `golang.org/x/text` | BSD-3-Clause |
 | `golang.org/x/time/rate` | BSD-3-Clause |
 | `gomodules.xyz/jsonpatch/v2` | Apache-2.0 |
+| `google.golang.org/genproto/googleapis/api/httpbody` | Apache-2.0 |
+| `google.golang.org/genproto/googleapis/rpc` | Apache-2.0 |
 | `google.golang.org/grpc` | Apache-2.0 |
 | `google.golang.org/protobuf` | BSD-3-Clause |
 | `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause |

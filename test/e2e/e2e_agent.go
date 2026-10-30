@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
@@ -386,6 +387,33 @@ func dumpVMIContainerLog(vmiName, container, description string) {
 		return
 	}
 	_, _ = fmt.Fprintf(GinkgoWriter, "%s %s:\n%s", vmiName, description, redactGuestCredentials(output))
+}
+
+// expectPhaseDelaysApplied checks the guest's serial console, where
+// mock-dpuagent logs, for each phase the fleet delays: the startup line that
+// shows the rendered config reached the mock, and a step line that shows a
+// delay was drawn. klog quotes the phase value, but it is matched either way so
+// a change in how a named string type is printed cannot fail the check.
+func expectPhaseDelaysApplied(g Gomega, vmiName string, phases []string) {
+	console, err := run(exec.Command(
+		"kubectl", "logs", "-n", fleetNamespace,
+		"-l", "vm.kubevirt.io/name="+vmiName,
+		"-c", "guest-console-log", "--tail=-1",
+	))
+	g.Expect(err).NotTo(HaveOccurred(), "read the serial console of %s", vmiName)
+	var matched []string
+	for _, phase := range phases {
+		for _, msg := range []string{"DPU phase delayed", "DPU phase delay"} {
+			line := regexp.MustCompile(`[^\n]*` + regexp.QuoteMeta(`"`+msg+`"`) + ` phase="?` +
+				regexp.QuoteMeta(phase) + `"?(\s[^\n]*)?(\n|$)`)
+			lines := line.FindAllString(console, -1)
+			g.Expect(lines).NotTo(BeEmpty(), "%s serial console has no %q line for phase %q", vmiName, msg, phase)
+			for _, l := range lines {
+				matched = append(matched, strings.TrimSpace(l))
+			}
+		}
+	}
+	_, _ = fmt.Fprintf(GinkgoWriter, "%s applied phase delays %q:\n  %s\n", vmiName, phases, strings.Join(matched, "\n  "))
 }
 
 // redactGuestCredentials drops the lines that carry credential material and

@@ -17,6 +17,7 @@ limitations under the License.
 package dpuagent
 
 import (
+	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	mockconfig "github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/config"
 	"github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/redfish"
 	. "github.com/onsi/ginkgo/v2"
@@ -162,7 +163,30 @@ var _ = Describe("Mock DPU agent config", func() {
 			Entry("empty firmware", &scalev1alpha1.DPUAgentSpec{
 				BMC: &scalev1alpha1.DPUAgentBMCSpec{Firmware: &scalev1alpha1.DPUAgentFirmware{}},
 			}),
+			Entry("empty phaseDelays", &scalev1alpha1.DPUAgentSpec{PhaseDelays: []scalev1alpha1.DPUAgentPhaseDelay{}}),
 		)
+
+		It("renders a phase delay for every phase the mock can delay", func() {
+			var delays []scalev1alpha1.DPUAgentPhaseDelay
+			var want []mockconfig.PhaseDelay
+			for i, phase := range scalev1alpha1.MockDelayablePhases {
+				delays = append(delays, scalev1alpha1.DPUAgentPhaseDelay{Phase: phase, MinSeconds: int32(i), MaxSeconds: int32(2 * i)})
+				want = append(want, mockconfig.PhaseDelay{
+					Phase:         provisioningv1.DPUPhase(phase),
+					ResponseDelay: mockconfig.ResponseDelay{MinSeconds: i, MaxSeconds: 2 * i},
+				})
+			}
+			got := startMock(&scalev1alpha1.DPUAgentSpec{PhaseDelays: delays})
+			Expect(got.PhaseDelays).To(Equal(want))
+		})
+
+		It("renders a zero phase delay rather than dropping it", func() {
+			config, err := RenderConfig(fleetWith(&scalev1alpha1.DPUAgentSpec{
+				PhaseDelays: []scalev1alpha1.DPUAgentPhaseDelay{{Phase: "Rebooting"}},
+			}), "MT0000000000")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config).To(ContainSubstring("phaseDelays:\n- maxSeconds: 0\n  minSeconds: 0\n  phase: Rebooting\n"))
+		})
 
 		DescribeTable("renders a config the mock starts with",
 			func(agent *scalev1alpha1.DPUAgentSpec) {

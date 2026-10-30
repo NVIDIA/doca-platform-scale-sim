@@ -196,6 +196,33 @@ type DPUAgentSpec struct {
 	// always rendered, which are the mock's own defaults.
 	// +optional
 	BMC *DPUAgentBMCSpec `json:"bmc,omitempty"`
+
+	// Extra time the mock spends in the steps it controls while the DPU is in
+	// a phase; see the mock-dpuagent "Phase delays" section. The range applies
+	// on every pass through the phase. OS Installing counts against DPF's
+	// --os-install-timeout.
+	// +listType=map
+	// +listMapKey=phase
+	// +optional
+	PhaseDelays []DPUAgentPhaseDelay `json:"phaseDelays,omitempty"`
+}
+
+// DPUAgentPhaseDelay is a closed range of whole seconds the mock adds to one
+// DPU phase.
+// +kubebuilder:validation:XValidation:rule="self.minSeconds <= self.maxSeconds",message="minSeconds must not exceed maxSeconds"
+type DPUAgentPhaseDelay struct {
+	// DPU phase as shown in DPU.status.phase, see MockDelayablePhases.
+	// +kubebuilder:validation:Enum="Update Firmware";"OS Installing";Rebooting;"DPU Config";"DPU Cluster Config";"Service Readiness"
+	// +required
+	Phase string `json:"phase"`
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=3600
+	// +required
+	MinSeconds int32 `json:"minSeconds"`
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=3600
+	// +required
+	MaxSeconds int32 `json:"maxSeconds"`
 }
 
 // DPUAgentBMCSpec configures the mock BMC; see the mock-dpuagent bmc block.
