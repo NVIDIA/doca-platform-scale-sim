@@ -180,7 +180,7 @@ func aggregateStatus(
 	admitted := status.AdmittedReplicas
 	templateErr := kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate)
 
-	var created, vmReady, provisioned, failed int
+	var created, guestReady, provisioned, failed int
 	observation := dpuObservation{}
 	bootstrap := bootstrapOutcome{cloudInit: map[int]struct{}{}, err: templateErr}
 	for _, ordinal := range sortedOrdinals(instances) {
@@ -192,8 +192,8 @@ func aggregateStatus(
 		if instancesCreated(instances, ordinal, ordinal+1) {
 			created++
 		}
-		if !deleting && instanceConditionTrue(instance, scalev1alpha1.SimInstanceVMReady) {
-			vmReady++
+		if !deleting && instanceConditionTrue(instance, scalev1alpha1.SimInstanceGuestReady) {
+			guestReady++
 		}
 		if !deleting && instanceConditionTrue(instance, scalev1alpha1.SimInstanceDPUProvisioned) {
 			provisioned++
@@ -219,17 +219,17 @@ func aggregateStatus(
 
 	status.ObservedGeneration = fleet.Generation
 	status.CreatedInstances = created
-	status.VMReadyInstances = vmReady
+	status.GuestReadyInstances = guestReady
 	status.ProvisionedInstances = provisioned
 	status.FailedInstances = failed
 	status.DPUNodes = dpuNodes
 
 	inventoryReady := admitted == replicas && instancesCreated(instances, 0, admitted)
-	meta.SetStatusCondition(&status.Conditions, inventoryReadyCondition(fleet, inventoryReady))
-	meta.SetStatusCondition(&status.Conditions, dpusObservedCondition(fleet, observation))
-	meta.SetStatusCondition(&status.Conditions, bootstrapReadyCondition(fleet, bootstrap, replicas))
+	meta.SetStatusCondition(&status.Conditions, inventoryReconciledCondition(fleet, inventoryReady))
+	meta.SetStatusCondition(&status.Conditions, dpusReconciledCondition(fleet, observation))
+	meta.SetStatusCondition(&status.Conditions, bootstrapReconciledCondition(fleet, bootstrap, replicas))
 	meta.SetStatusCondition(&status.Conditions,
-		virtualMachinesReadyCondition(fleet, created, vmReady, replicas, templateErr))
+		guestsReadyCondition(fleet, created, guestReady, replicas, templateErr))
 	return status
 }
 
@@ -254,7 +254,7 @@ func (r *SimFleetReconciler) patchFleetStatus(
 	fleet.Status = aggregateStatus(fleet, instances, dpuNodes)
 	if conflict != "" {
 		meta.SetStatusCondition(&fleet.Status.Conditions, metav1.Condition{
-			Type:               scalev1alpha1.ConditionInventoryReady,
+			Type:               scalev1alpha1.ConditionInventoryReconciled,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: fleet.Generation,
 			Reason:             "OwnershipConflict",
@@ -288,7 +288,7 @@ func (r *SimFleetReconciler) reconcileError(
 	reconcileErr error,
 ) (ctrl.Result, error) {
 	condition := metav1.Condition{
-		Type:               scalev1alpha1.ConditionInventoryReady,
+		Type:               scalev1alpha1.ConditionInventoryReconciled,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: fleet.Generation,
 		Reason:             "ReconcileError",
@@ -305,9 +305,9 @@ func (r *SimFleetReconciler) reconcileError(
 	return ctrl.Result{}, reconcileErr
 }
 
-func inventoryReadyCondition(fleet *scalev1alpha1.SimFleet, ready bool) metav1.Condition {
+func inventoryReconciledCondition(fleet *scalev1alpha1.SimFleet, ready bool) metav1.Condition {
 	condition := metav1.Condition{
-		Type:               scalev1alpha1.ConditionInventoryReady,
+		Type:               scalev1alpha1.ConditionInventoryReconciled,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: fleet.Generation,
 		Reason:             "Progressing",
@@ -321,9 +321,9 @@ func inventoryReadyCondition(fleet *scalev1alpha1.SimFleet, ready bool) metav1.C
 	return condition
 }
 
-func dpusObservedCondition(fleet *scalev1alpha1.SimFleet, observation dpuObservation) metav1.Condition {
+func dpusReconciledCondition(fleet *scalev1alpha1.SimFleet, observation dpuObservation) metav1.Condition {
 	condition := metav1.Condition{
-		Type:               scalev1alpha1.ConditionDPUsObserved,
+		Type:               scalev1alpha1.ConditionDPUsReconciled,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: fleet.Generation,
 		Reason:             "WaitingForDPUs",
@@ -341,7 +341,7 @@ func dpusObservedCondition(fleet *scalev1alpha1.SimFleet, observation dpuObserva
 	return condition
 }
 
-// bootstrapReadyCondition reports whether the material a guest boots with is
+// bootstrapReconciledCondition reports whether the material a guest boots with is
 // in place: one cloud-init Secret per bootable ordinal, carrying that
 // ordinal's identity, mock configuration, and management credential.
 //
@@ -350,13 +350,13 @@ func dpusObservedCondition(fleet *scalev1alpha1.SimFleet, observation dpuObserva
 // longer be false because of the DPUCluster; it is false only for a
 // configuration this controller refuses or a pass that has not finished
 // writing those Secrets.
-func bootstrapReadyCondition(
+func bootstrapReconciledCondition(
 	fleet *scalev1alpha1.SimFleet,
 	bootstrap bootstrapOutcome,
 	desiredVMs int,
 ) metav1.Condition {
 	condition := metav1.Condition{
-		Type:               scalev1alpha1.ConditionBootstrapReady,
+		Type:               scalev1alpha1.ConditionBootstrapReconciled,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: fleet.Generation,
 		Reason:             "Ready",
@@ -388,43 +388,43 @@ func bootstrapReadyCondition(
 	return condition
 }
 
-func virtualMachinesReadyCondition(
+func guestsReadyCondition(
 	fleet *scalev1alpha1.SimFleet,
-	vmCount int,
-	vmReady int,
-	desiredVMs int,
-	vmErr error,
+	guestCount int,
+	guestReady int,
+	desiredGuests int,
+	guestErr error,
 ) metav1.Condition {
-	if vmErr != nil {
+	if guestErr != nil {
 		return metav1.Condition{
-			Type:               scalev1alpha1.ConditionVirtualMachinesReady,
+			Type:               scalev1alpha1.ConditionGuestsReady,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: fleet.Generation,
-			Reason:             conditionReason(vmErr),
-			Message:            vmErr.Error(),
+			Reason:             conditionReason(guestErr),
+			Message:            guestErr.Error(),
 		}
 	}
 	condition := metav1.Condition{
-		Type:               scalev1alpha1.ConditionVirtualMachinesReady,
+		Type:               scalev1alpha1.ConditionGuestsReady,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: fleet.Generation,
 		Reason:             "Progressing",
-		Message:            fmt.Sprintf("Created %d of %d desired VirtualMachines", vmCount, desiredVMs),
+		Message:            fmt.Sprintf("Created %d of %d desired guests", guestCount, desiredGuests),
 	}
 	switch {
-	case fleet.Spec.VirtualMachineTemplate == nil || desiredVMs == 0:
+	case fleet.Spec.VirtualMachineTemplate == nil || desiredGuests == 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = "Ready"
-		condition.Message = "No VirtualMachines are required"
-	case vmCount == desiredVMs && vmReady == vmCount:
+		condition.Message = "No guests are required"
+	case guestCount == desiredGuests && guestReady == guestCount:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = "Ready"
-		condition.Message = "All desired VirtualMachines are ready"
-	case vmCount < desiredVMs:
+		condition.Message = "All desired guests are ready"
+	case guestCount < desiredGuests:
 		condition.Reason = "Progressing"
 	default:
-		condition.Reason = "WaitingForVMs"
-		condition.Message = fmt.Sprintf("%d/%d VirtualMachines are ready", vmReady, desiredVMs)
+		condition.Reason = "WaitingForGuests"
+		condition.Message = fmt.Sprintf("%d/%d guests are ready", guestReady, desiredGuests)
 	}
 	return condition
 }

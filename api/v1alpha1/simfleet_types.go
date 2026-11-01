@@ -27,12 +27,21 @@ import (
 // is gone.
 const SimFleetFinalizer = "scale.dpu.nvidia.com/simfleet"
 
-// Condition types reported on SimFleet status.
+// Condition types reported on SimFleet status. Names follow the DPF
+// conditions pattern: XXXReconciled means this controller has applied its
+// changes, and XXXReady means those resources are ready.
 const (
-	ConditionInventoryReady       = "InventoryReady"
-	ConditionDPUsObserved         = "DPUsObserved"
-	ConditionVirtualMachinesReady = "VirtualMachinesReady"
-	ConditionBootstrapReady       = "BootstrapReady"
+	// ConditionInventoryReconciled is true once SimInstances and DPUNodes
+	// match the desired counts.
+	ConditionInventoryReconciled = "InventoryReconciled"
+	// ConditionDPUsReconciled is true once a DPU exists for every instance.
+	// Provisioning those DPUs is reported separately.
+	ConditionDPUsReconciled = "DPUsReconciled"
+	// ConditionGuestsReady is true once every guest is ready.
+	ConditionGuestsReady = "GuestsReady"
+	// ConditionBootstrapReconciled is true once the guest bootstrap Secrets
+	// are in place.
+	ConditionBootstrapReconciled = "BootstrapReconciled"
 )
 
 // ReservedDeviceLabelKeys are the DPUDevice labels the SimFleet controller
@@ -368,10 +377,10 @@ type SimFleetStatus struct {
 	// (ChildrenCreated), excluding Failed and deleting instances.
 	// +optional
 	CreatedInstances int `json:"createdInstances,omitempty"`
-	// VMReadyInstances counts SimInstances whose VirtualMachine is ready
-	// (VMReady), excluding deleting instances.
+	// GuestReadyInstances counts SimInstances whose guest is ready
+	// (GuestReady), excluding deleting instances.
 	// +optional
-	VMReadyInstances int `json:"vmReadyInstances,omitempty"`
+	GuestReadyInstances int `json:"guestReadyInstances,omitempty"`
 	// ProvisionedInstances counts SimInstances whose DPU has kubelet
 	// configured (DPUProvisioned), excluding deleting instances.
 	// +optional
@@ -394,7 +403,7 @@ type SimFleetStatus struct {
 // +kubebuilder:printcolumn:name="Admitted",type=integer,JSONPath=".status.admittedReplicas"
 // +kubebuilder:printcolumn:name="Provisioned",type=integer,JSONPath=".status.provisionedInstances"
 // +kubebuilder:printcolumn:name="Failed",type=integer,JSONPath=".status.failedInstances"
-// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='InventoryReady')].status"
+// +kubebuilder:printcolumn:name="Reconciled",type=string,JSONPath=".status.conditions[?(@.type=='InventoryReconciled')].status"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // SimFleet is the Schema for the simfleets API

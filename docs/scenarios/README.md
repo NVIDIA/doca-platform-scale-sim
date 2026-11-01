@@ -170,15 +170,15 @@ next phase.
 
 ## SimFleet readiness
 
-SimFleet should report `InventoryReady`, `DPUsObserved`, `BootstrapReady`,
-and `VirtualMachinesReady` True, with `vmReadyInstances` equal to
-`replicas`.
+SimFleet should report `InventoryReconciled`, `DPUsReconciled`,
+`BootstrapReconciled`, and `GuestsReady` True, with `guestReadyInstances`
+equal to `replicas`.
 
 Each `DPUDevice` gains `spec.bmcIp` (the guest's delegated pod-network IPv4)
 and the DPUSet pool label only after its VM is running and SimFleet has
 verified VMI ownership. DPF then claims the device and drives the normal
 Redfish short path against the guest mock. DPU provisioning and tenant Node
-Ready can take several minutes after `VirtualMachinesReady`.
+Ready can take several minutes after `GuestsReady`.
 
 ## Nested Flannel networking
 

@@ -138,8 +138,8 @@ kubectl -n dpf-operator-system get simfleet passthrough-fleet -w
 kubectl -n dpf-operator-system get vmi,dpudevice,dpu
 ```
 
-The fleet is ready when `InventoryReady`, `DPUsObserved`, `BootstrapReady` and
-`VirtualMachinesReady` are True. DPU provisioning and the tenant nodes turning
+The fleet is ready when `InventoryReconciled`, `DPUsReconciled`, `BootstrapReconciled` and
+`GuestsReady` are True. DPU provisioning and the tenant nodes turning
 Ready take a few more minutes; see
 [SimFleet readiness](docs/scenarios/README.md#simfleet-readiness).
 

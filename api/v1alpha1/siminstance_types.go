@@ -43,7 +43,7 @@ const (
 	SimInstanceCredentialsReady = "CredentialsReady"
 	SimInstanceDeviceCreated    = "DeviceCreated"
 	SimInstanceChildrenCreated  = "ChildrenCreated"
-	SimInstanceVMReady          = "VMReady"
+	SimInstanceGuestReady       = "GuestReady"
 	SimInstanceSelectable       = "Selectable"
 	SimInstanceDPUProvisioned   = "DPUProvisioned"
 	SimInstanceTeardown         = "Teardown"
