@@ -102,7 +102,6 @@ the e2e suite. They are not redistributed.
 | `github.com/prometheus/procfs` | Apache-2.0 |
 | `github.com/spf13/cobra` | Apache-2.0 |
 | `github.com/spf13/pflag` | BSD-3-Clause |
-| `github.com/stoewer/go-strcase` | MIT |
 | `github.com/x448/float16` | MIT |
 | `go.opentelemetry.io/auto/sdk` | Apache-2.0 |
 | `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | Apache-2.0 |
