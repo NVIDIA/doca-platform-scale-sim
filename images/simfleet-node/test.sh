@@ -69,6 +69,134 @@ assert_secret_read_once() {
 	fi
 }
 
+# test_container_image_contract pins the node-in-a-pod image's recipe. It reads
+# files only, so it needs neither Docker nor a built image.
+test_container_image_contract() {
+	local file dockerfile="${ROOT}/Dockerfile.container"
+	for file in Dockerfile.container verify-container.sh \
+		guest/container-entrypoint.sh guest/kubeadm-join.args \
+		"guest/kubeadm-patches/kubeletconfiguration+strategic.yaml"; do
+		test -f "${ROOT}/${file}" || fail "missing ${file}"
+	done
+	for file in verify-container.sh guest/container-entrypoint.sh; do
+		test -x "${ROOT}/${file}" || fail "${file} is not executable"
+		bash -n "${ROOT}/${file}" || fail "${file} does not parse"
+	done
+
+	# The join args file is one line, one argument, and nothing that waves
+	# preflight errors through.
+	local args="${ROOT}/guest/kubeadm-join.args"
+	[ "$(cat "${args}")" = '--patches=/usr/lib/dpf-sim/kubeadm-patches' ] \
+		|| fail "guest/kubeadm-join.args must hold exactly --patches=/usr/lib/dpf-sim/kubeadm-patches"
+	[ "$(wc -l < "${args}" | tr -d ' ')" = 1 ] || fail "guest/kubeadm-join.args must be one line"
+	assert_absent 'ignore-preflight-errors' "${args}"
+
+	# The kubelet patch overrides exactly what the container needs.
+	local patch="${ROOT}/guest/kubeadm-patches/kubeletconfiguration+strategic.yaml"
+	assert_matches '^apiVersion: kubelet\.config\.k8s\.io/v1beta1$' "${patch}"
+	assert_matches '^kind: KubeletConfiguration$' "${patch}"
+	assert_matches '^cgroupRoot: /$' "${patch}"
+	assert_matches '^failSwapOn: false$' "${patch}"
+	assert_matches '^evictionHard:$' "${patch}"
+	assert_matches '^  nodefs\.available: "0%"$' "${patch}"
+	assert_matches '^  nodefs\.inodesFree: "0%"$' "${patch}"
+	assert_matches '^  imagefs\.available: "0%"$' "${patch}"
+
+	# Dockerfile directives.
+	assert_matches '^FROM ubuntu:24\.04$' "${dockerfile}"
+	assert_matches '^ENV container=oci( |\\|$)' "${dockerfile}"
+	assert_matches '^STOPSIGNAL SIGRTMIN\+3$' "${dockerfile}"
+	assert_matches '^ENTRYPOINT \["/usr/local/bin/container-entrypoint\.sh"\]$' "${dockerfile}"
+	assert_matches '^ARG KUBE_APT_VERSION$' "${dockerfile}"
+	# lib.sh stays the only Kubernetes pin.
+	assert_absent '1.36' "${dockerfile}"
+	assert_contains 'KUBE_APT_VERSION="${KUBE_APT_VERSION}" /tmp/install.sh' "${dockerfile}"
+	assert_matches 'systemd( |$)' "${dockerfile}"
+	assert_matches '[[:space:]]kmod( |$)' "${dockerfile}"
+	assert_matches '[[:space:]]procps( |$)' "${dockerfile}"
+	assert_not_matches '^[^#]*qemu-guest-agent' "${dockerfile}"
+	assert_absent 'modules-load.d/simfleet.conf' "${dockerfile}"
+	# The same two units, binary and helper, at the same paths as the VM disk.
+	assert_contains 'guest/mock-dpuagent.service guest/wait-kubelet-join.service /usr/lib/systemd/system/' "${dockerfile}"
+	assert_contains '/opt/dpf/mock-dpuagent' "${dockerfile}"
+	assert_contains 'guest/wait-kubelet-join.sh /opt/dpf/wait-kubelet-join.sh' "${dockerfile}"
+	assert_contains 'systemctl enable mock-dpuagent.service wait-kubelet-join.service' "${dockerfile}"
+	assert_contains 'guest/10-flannel.conflist /etc/cni/net.d/10-flannel.conflist' "${dockerfile}"
+	assert_contains 'guest/kubeadm-join.args /usr/lib/dpf-sim/kubeadm-join.args' "${dockerfile}"
+	assert_contains 'guest/kubeadm-patches/ /usr/lib/dpf-sim/kubeadm-patches/' "${dockerfile}"
+	# Outside comments, nothing may be put under /etc/dpf-sim: the guest Secret
+	# is mounted over it.
+	assert_not_matches '^[^#]*/etc/dpf-sim' "${dockerfile}"
+	local unit
+	for unit in systemd-modules-load.service systemd-resolved.service \
+		systemd-udevd.service 'getty@.service' systemd-remount-fs.service; do
+		assert_contains "${unit}" "${dockerfile}"
+	done
+	assert_contains 'systemctl mask' "${dockerfile}"
+	assert_matches 'guest/container-entrypoint\.sh /usr/local/bin/container-entrypoint\.sh' "${dockerfile}"
+
+	# The entrypoint.
+	local entrypoint="${ROOT}/guest/container-entrypoint.sh"
+	assert_contains 'exec unshare --cgroup' "${entrypoint}"
+	assert_contains 'umount /sys/fs/cgroup' "${entrypoint}"
+	assert_contains 'mount -t cgroup2' "${entrypoint}"
+	assert_contains '"0::/"' "${entrypoint}"
+	assert_contains '/proc/self/cgroup' "${entrypoint}"
+	assert_contains 'mount --make-rshared /' "${entrypoint}"
+	assert_contains '/sys/fs/cgroup/init.scope' "${entrypoint}"
+	assert_contains '/sys/fs/cgroup/cgroup.subtree_control' "${entrypoint}"
+	assert_contains ': > /etc/machine-id' "${entrypoint}"
+	assert_contains '/dev/kmsg' "${entrypoint}"
+	assert_matches '^exec /sbin/init$' "${entrypoint}"
+	assert_contains 'kind' "${entrypoint}"
+	# The cgroup check must come before anything touches the hierarchy, and
+	# init must be the last thing the script does.
+	local check_line move_line init_line
+	check_line="$(grep -n '"0::/"' "${entrypoint}" | head -1 | cut -d: -f1)"
+	move_line="$(grep -n 'init.scope/cgroup.procs' "${entrypoint}" | head -1 | cut -d: -f1)"
+	init_line="$(grep -n '^exec /sbin/init$' "${entrypoint}" | cut -d: -f1)"
+	[ "${check_line}" -lt "${move_line}" ] || fail "the entrypoint moves processes before checking its cgroup root"
+	[ "${move_line}" -lt "${init_line}" ] || fail "the entrypoint must exec /sbin/init last"
+	[ "${init_line}" = "$(grep -c '' "${entrypoint}")" ] || fail "nothing may follow exec /sbin/init"
+	assert_contains 'kind' "${ROOT}/../../THIRD_PARTY_NOTICES.md"
+	assert_contains 'images/simfleet-node/guest/container-entrypoint.sh' "${ROOT}/../../THIRD_PARTY_NOTICES.md"
+
+	# The Makefile target.
+	assert_contains 'node-container-image-build:' "${ROOT}/Makefile"
+	assert_contains 'NODE_CONTAINER_IMG ?= simfleet-node-container:local' "${ROOT}/Makefile"
+	assert_contains '--platform linux/amd64' "${ROOT}/Makefile"
+	assert_contains '-f Dockerfile.container' "${ROOT}/Makefile"
+	assert_contains '--build-arg KUBE_APT_VERSION="$(KUBE_APT_VERSION)"' "${ROOT}/Makefile"
+	assert_contains 'SIMFLEET_KUBE_APT_VERSION' "${ROOT}/Makefile"
+	assert_absent '1.36' "${ROOT}/Makefile"
+	assert_contains 'DPUAGENT_BIN' "${ROOT}/Makefile"
+	if command -v make > /dev/null 2>&1; then
+		make -s -n -C "${ROOT}" node-container-image-build DPUAGENT_BIN="${TMP}/mock" > "${TMP}/container-make.out" 2>&1 \
+			|| fail "make -n node-container-image-build failed"
+		assert_contains 'KUBE_APT_VERSION="1.36.4-1.1"' "${TMP}/container-make.out"
+		assert_contains "--build-context dpuagent=\"${TMP}/\"" "${TMP}/container-make.out"
+	fi
+
+	# The VM disk must not carry anything that only the container uses: the VM
+	# image ships no join-args file, kubelet patch or entrypoint.
+	for file in kubeadm-join.args kubeadm-patches container-entrypoint.sh \
+		/usr/lib/dpf-sim; do
+		assert_absent "${file}" "${ROOT}/customize-disk.sh"
+		assert_absent "${file}" "${ROOT}/Dockerfile"
+	done
+	assert_absent 'Dockerfile.container' "${ROOT}/customize-disk.sh"
+
+	# The verifier checks what the brief promises.
+	local verifier="${ROOT}/verify-container.sh"
+	assert_contains 'run -d --privileged' "${verifier}"
+	assert_contains 'running | degraded' "${verifier}"
+	assert_contains 'is-enabled kubelet.service' "${verifier}"
+	assert_contains 'mock-dpuagent.service' "${verifier}"
+	assert_contains 'wait-kubelet-join.service' "${verifier}"
+	assert_contains 'dpkg-query -W -f=' "${verifier}"
+	assert_contains 'SIMFLEET_KUBE_APT_VERSION' "${verifier}"
+}
+
 test_recipe_contract() {
 	local file
 	for file in Makefile build.sh build-cached.sh check-host.sh lib.sh \
@@ -1762,6 +1890,7 @@ test_verifier_rejects_build_time_resolver() {
 }
 
 test_recipe_contract
+test_container_image_contract
 test_source_hash
 test_build_orchestration
 test_build_requires_dpuagent_binary

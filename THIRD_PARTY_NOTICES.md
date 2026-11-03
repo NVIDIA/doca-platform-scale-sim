@@ -2,8 +2,8 @@
 
 The code in this repository is licensed under the
 [Apache License 2.0](LICENSE). This file lists the third-party software the
-repository includes and the third-party software in the two container images
-it builds.
+repository includes and the third-party software in the container images it
+builds.
 
 ## In this repository
 
@@ -11,6 +11,7 @@ it builds.
 | --- | --- | --- | --- |
 | [KubeVirt](https://github.com/kubevirt/kubevirt) `VirtualMachine` and `VirtualMachineInstance` CRDs | v1.9.0 | Apache-2.0 | `config/kubevirt-crds/`, used by envtest only |
 | [kube-flannel](https://github.com/flannel-io/flannel) default CNI configuration | - | Apache-2.0 | `images/simfleet-node/guest/10-flannel.conflist` |
+| [kind](https://github.com/kubernetes-sigs/kind) node image entrypoint, adapted | - | Apache-2.0 | `images/simfleet-node/guest/container-entrypoint.sh` |
 
 ## Controller image
 
@@ -49,6 +50,21 @@ Ubuntu archive and can be fetched with `apt-get source <package>`.
 The mock-dpuagent binary statically links the Go modules listed in
 [Go modules in mock-dpuagent](#go-modules-in-mock-dpuagent), at the versions
 doca-platform's `go.mod` requires at that commit.
+
+## Node container image
+
+The `simfleet-node-container` image runs the same guest as a privileged Pod. It
+is built from [`ubuntu:24.04`](https://hub.docker.com/_/ubuntu) with the
+components of the guest image above, plus systemd, dbus, kmod, procps and the
+networking tools kubelet expects, all from the Ubuntu archive with their
+licenses in `/usr/share/doc/<package>/copyright`.
+
+Its entrypoint, `images/simfleet-node/guest/container-entrypoint.sh`, is
+adapted from the entrypoint of the [kind](https://github.com/kubernetes-sigs/kind)
+node image, which is Apache-2.0 licensed and Copyright The Kubernetes Authors.
+It keeps the cgroup namespace, `init.scope`, `/dev/kmsg` and shared-mount
+steps, reduced to what this image needs. The image's list of masked systemd
+units and its kubelet `evictionHard` thresholds follow kind's node image too.
 
 ## Build and test tools
 

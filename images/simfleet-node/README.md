@@ -169,6 +169,23 @@ allocation and may overwrite that conflist. The baked file keeps kubelet
 Ready when the Flannel DaemonSet copies `/opt/cni/bin/flannel` but skips
 installing the conflist.
 
+## Node container image
+
+`Dockerfile.container` builds the same guest as a privileged-Pod image,
+`simfleet-node-container`, with systemd as PID 1:
+
+```sh
+make dpuagent-build                  # once, from the repo root
+make node-container-image-build      # linux/amd64
+./verify-container.sh                # runs the image with docker run --privileged
+```
+
+The Kubernetes pin comes from `lib.sh`, the mock binary from `DPUAGENT_BIN`.
+`guest/container-entrypoint.sh` gives systemd its own cgroup namespace, and
+`guest/kubeadm-join.args` and `guest/kubeadm-patches/` (under
+`/usr/lib/dpf-sim/` in the image) adjust `kubeadm join` and the kubelet
+configuration for a container. None of these go into the VM disk.
+
 ## Tests
 
 ```sh
