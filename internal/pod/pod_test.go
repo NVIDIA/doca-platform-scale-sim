@@ -226,6 +226,19 @@ var _ = Describe("DesiredPod", func() {
 		Expect(resources.Requests).To(HaveLen(2), "the template is not modified")
 	})
 
+	It("does not copy resource claims onto the container", func() {
+		resources := &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+			Claims: []corev1.ResourceClaim{{Name: "gpu"}},
+		}
+		pod := DesiredPod(podFleet(&scalev1alpha1.PodTemplate{Image: "example.com/node:v1", Resources: resources}), 0)
+
+		got := pod.Spec.Containers[0].Resources
+		Expect(got.Claims).To(BeEmpty(), "container resources.claims")
+		Expect(pod.Spec.ResourceClaims).To(BeEmpty(), "pod resourceClaims")
+		Expect(got.Limits.Memory().String()).To(Equal("4Gi"), "limits are still copied")
+	})
+
 	It("defaults both requests for a nil and for an empty resources object, with no limits", func() {
 		for _, resources := range []*corev1.ResourceRequirements{nil, {}} {
 			pod := DesiredPod(podFleet(&scalev1alpha1.PodTemplate{Image: "example.com/node:v1", Resources: resources}), 0)

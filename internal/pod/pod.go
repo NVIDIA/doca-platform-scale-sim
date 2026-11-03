@@ -104,7 +104,8 @@ func DesiredPod(fleet *scalev1alpha1.SimFleet, ordinal int) *corev1.Pod {
 	resources := corev1.ResourceRequirements{Requests: requests(tmpl.Resources)}
 	if tmpl.Resources != nil {
 		resources.Limits = tmpl.Resources.Limits
-		resources.Claims = tmpl.Resources.Claims
+		// Claims are dropped on purpose: a claim must name an entry in
+		// pod.spec.resourceClaims, which the template cannot set.
 	}
 
 	identityItems := []corev1.KeyToPath{{Key: cloudinit.IdentityFileName, Path: cloudinit.IdentityFileName}}
