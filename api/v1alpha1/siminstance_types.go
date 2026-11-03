@@ -66,6 +66,7 @@ type ObservedUIDs struct {
 	DPUDevice              string `json:"dpuDevice,omitempty"`
 	VirtualMachine         string `json:"virtualMachine,omitempty"`
 	VirtualMachineInstance string `json:"virtualMachineInstance,omitempty"`
+	Pod                    string `json:"pod,omitempty"`
 }
 
 // SimInstanceStatus is the observed state of one ordinal.

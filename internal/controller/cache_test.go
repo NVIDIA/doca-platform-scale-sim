@@ -33,6 +33,20 @@ import (
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
+var _ = Describe("Manager cache selector", func() {
+	It("scopes Pods to the fleet label, as it does Secrets", func() {
+		byObject := ManagerCacheOptions().ByObject
+		var selectors []string
+		for obj, options := range byObject {
+			if _, ok := obj.(*corev1.Pod); ok {
+				Expect(options.Label).NotTo(BeNil())
+				selectors = append(selectors, options.Label.String())
+			}
+		}
+		Expect(selectors).To(Equal([]string{naming.LabelFleetName}))
+	})
+})
+
 var _ = Describe("Manager cache", func() {
 	It("caches only fleet-labelled Secrets", func() {
 		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "cache-scope-"}}

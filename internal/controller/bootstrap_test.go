@@ -44,6 +44,18 @@ var _ = Describe("credentialsEligible", func() {
 			}
 			fleet.Spec.DPUAgent = &scalev1alpha1.DPUAgentSpec{Enabled: ptr.To(true)}
 		}, true),
+		Entry("a Pod template and an enabled agent", func(fleet *scalev1alpha1.SimFleet) {
+			fleet.Spec.PodTemplate = &scalev1alpha1.PodTemplate{Image: "example.com/node@sha256:test"}
+			fleet.Spec.DPUAgent = &scalev1alpha1.DPUAgentSpec{Enabled: ptr.To(true)}
+		}, true),
+		Entry("a Pod template and a disabled agent", func(fleet *scalev1alpha1.SimFleet) {
+			fleet.Spec.PodTemplate = &scalev1alpha1.PodTemplate{Image: "example.com/node@sha256:test"}
+			fleet.Spec.DPUAgent = &scalev1alpha1.DPUAgentSpec{Enabled: ptr.To(false)}
+		}, false),
+		Entry("a Pod template with no image", func(fleet *scalev1alpha1.SimFleet) {
+			fleet.Spec.PodTemplate = &scalev1alpha1.PodTemplate{}
+			fleet.Spec.DPUAgent = &scalev1alpha1.DPUAgentSpec{Enabled: ptr.To(true)}
+		}, false),
 		// No VirtualMachine means no guest, and the cloud-init pass that
 		// issues credentials returns before it reaches them.
 		Entry("no VM template", func(fleet *scalev1alpha1.SimFleet) {

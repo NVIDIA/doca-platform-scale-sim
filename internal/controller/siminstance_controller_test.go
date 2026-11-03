@@ -31,6 +31,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -74,7 +75,19 @@ type instanceHarness struct {
 
 func newInstanceHarness(fleet *scalev1alpha1.SimFleet, objects ...client.Object) *instanceHarness {
 	GinkgoHelper()
-	scheme := instanceTestScheme()
+	return newInstanceHarnessOn(instanceTestScheme(), true, fleet, objects...)
+}
+
+// newInstanceHarnessOn is newInstanceHarness for a cluster described by scheme.
+// A scheme without the KubeVirt types makes every KubeVirt read fail, which is
+// how a test shows the reconciler never makes one.
+func newInstanceHarnessOn(
+	scheme *runtime.Scheme,
+	kubeVirtInstalled bool,
+	fleet *scalev1alpha1.SimFleet,
+	objects ...client.Object,
+) *instanceHarness {
+	GinkgoHelper()
 	instance := newInstanceFixture(fleet, instanceOrdinal)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -94,6 +107,7 @@ func newInstanceHarness(fleet *scalev1alpha1.SimFleet, objects ...client.Object)
 			Scheme:                    scheme,
 			ServiceAccountTokenIssuer: issuer,
 			ManagementCA:              []byte("test-ca"),
+			KubeVirtInstalled:         kubeVirtInstalled,
 		},
 		issuer:   issuer,
 		fleet:    fleet,
@@ -314,6 +328,9 @@ var recordedUIDs = scalev1alpha1.ObservedUIDs{
 	VirtualMachineInstance: "vmi-uid",
 }
 
+// recordedPodUID is the UID a pod fleet's instance recorded for its Pod.
+const recordedPodUID = "pod-uid"
+
 // readyChildren are the children a Ready instance holds, plus the DPU and
 // kubeadm join Secret DPF creates for its device. A nil field is absent.
 type readyChildren struct {
@@ -321,6 +338,8 @@ type readyChildren struct {
 	role           *rbacv1.Role
 	roleBinding    *rbacv1.RoleBinding
 	cloudInit      *corev1.Secret
+	guestSecret    *corev1.Secret
+	pod            *corev1.Pod
 	device         *provisioningv1.DPUDevice
 	vm             *virtv1.VirtualMachine
 	vmi            *virtv1.VirtualMachineInstance
@@ -391,6 +410,8 @@ func (c *readyChildren) objects() []client.Object {
 	add(c.role, c.role != nil)
 	add(c.roleBinding, c.roleBinding != nil)
 	add(c.cloudInit, c.cloudInit != nil)
+	add(c.guestSecret, c.guestSecret != nil)
+	add(c.pod, c.pod != nil)
 	add(c.device, c.device != nil)
 	add(c.vm, c.vm != nil)
 	add(c.vmi, c.vmi != nil)
@@ -409,8 +430,21 @@ type teardownHarness struct {
 // teardown finalizer, the fleet-name label, and the recorded child UIDs.
 func newReadyInstanceHarness(fleet *scalev1alpha1.SimFleet, children *readyChildren) *teardownHarness {
 	GinkgoHelper()
+	return newReadyInstanceHarnessOn(instanceTestScheme(), true, fleet, children, recordedUIDs)
+}
+
+// newReadyInstanceHarnessOn is newReadyInstanceHarness for the cluster scheme
+// describes, with recorded as the UIDs the instance recorded.
+func newReadyInstanceHarnessOn(
+	scheme *runtime.Scheme,
+	kubeVirtInstalled bool,
+	fleet *scalev1alpha1.SimFleet,
+	children *readyChildren,
+	recorded scalev1alpha1.ObservedUIDs,
+) *teardownHarness {
+	GinkgoHelper()
 	th := &teardownHarness{
-		instanceHarness: newInstanceHarness(fleet, children.objects()...),
+		instanceHarness: newInstanceHarnessOn(scheme, kubeVirtInstalled, fleet, children.objects()...),
 		now:             teardownClock,
 		recorder:        events.NewFakeRecorder(100),
 	}
@@ -422,7 +456,7 @@ func newReadyInstanceHarness(fleet *scalev1alpha1.SimFleet, children *readyChild
 	instance.Labels = map[string]string{naming.LabelFleetName: fleet.Name}
 	th.update(instance)
 	instance.Status.Phase = scalev1alpha1.SimInstanceReady
-	instance.Status.ObservedUIDs = recordedUIDs
+	instance.Status.ObservedUIDs = recorded
 	Expect(th.client.Status().Update(context.Background(), instance)).To(Succeed(), "update SimInstance status")
 	return th
 }
@@ -1291,7 +1325,7 @@ var _ = Describe("SimInstance helpers", func() {
 				Expect(labelScopedCacheKind(obj)).To(BeTrue(),
 					"labelScopedCacheKind(%T) = false, but ManagerCacheOptions scopes it by label", obj)
 			}
-			Expect(byObject).To(HaveLen(4), "ManagerCacheOptions should scope the 4 kinds labelScopedCacheKind knows")
+			Expect(byObject).To(HaveLen(5), "ManagerCacheOptions should scope the 5 kinds labelScopedCacheKind knows")
 			Expect(labelScopedCacheKind(&provisioningv1.DPUDevice{})).To(BeFalse(), "labelScopedCacheKind(DPUDevice)")
 		})
 	})

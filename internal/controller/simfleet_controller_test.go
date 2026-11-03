@@ -250,7 +250,7 @@ var _ = Describe("SimFleet status", func() {
 				observedInstance(fleet, 4, scalev1alpha1.SimInstanceTerminating, "dpu-4", readyInstanceConditions...),
 			)
 
-			status := aggregateStatus(fleet, instances, 2)
+			status := aggregateStatus(fleet, instances, 2, true)
 
 			Expect(status.AdmittedReplicas).To(Equal(4), "admittedReplicas")
 			Expect(status.CreatedInstances).To(Equal(2), "createdInstances")
@@ -271,7 +271,7 @@ var _ = Describe("SimFleet status", func() {
 				observedInstance(fleet, 1, scalev1alpha1.SimInstanceReady, "dpu-1", readyInstanceConditions...),
 			)
 
-			status := aggregateStatus(fleet, instances, 1)
+			status := aggregateStatus(fleet, instances, 1, true)
 
 			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionTrue, "Ready")
 			expectCondition(status, scalev1alpha1.ConditionDPUsReconciled, metav1.ConditionTrue, "Ready")
@@ -283,7 +283,7 @@ var _ = Describe("SimFleet status", func() {
 			fleet := rolloutFleet(250, 10, 100)
 			instances := instanceMap(fleetInstances(fleet, 0, 100, readyInstanceConditions...)...)
 
-			status := aggregateStatus(fleet, instances, 10)
+			status := aggregateStatus(fleet, instances, 10, true)
 
 			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "Progressing")
 		})
@@ -294,7 +294,7 @@ var _ = Describe("SimFleet status", func() {
 				observedInstance(fleet, 0, scalev1alpha1.SimInstanceReady, "dpu-0", readyInstanceConditions...),
 			)
 
-			status := aggregateStatus(fleet, instances, 1)
+			status := aggregateStatus(fleet, instances, 1, true)
 
 			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "Progressing")
 		})
@@ -309,7 +309,7 @@ var _ = Describe("SimFleet status", func() {
 					second,
 				)
 
-				status := aggregateStatus(fleet, instances, 1)
+				status := aggregateStatus(fleet, instances, 1, true)
 
 				expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "Progressing")
 				Expect(status.CreatedInstances).To(Equal(1), "createdInstances")
@@ -326,7 +326,7 @@ var _ = Describe("SimFleet status", func() {
 		)
 
 		It("reports a fleet of zero replicas as ready", func() {
-			status := aggregateStatus(rolloutFleet(0, 1, 0), nil, 0)
+			status := aggregateStatus(rolloutFleet(0, 1, 0), nil, 0, true)
 
 			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionTrue, "Ready")
 			expectCondition(status, scalev1alpha1.ConditionDPUsReconciled, metav1.ConditionTrue, "Ready")
@@ -346,7 +346,7 @@ var _ = Describe("SimFleet status", func() {
 				duplicate,
 			)
 
-			status := aggregateStatus(fleet, instances, 1)
+			status := aggregateStatus(fleet, instances, 1, true)
 
 			expectCondition(status, scalev1alpha1.ConditionDPUsReconciled, metav1.ConditionFalse, "MultipleDPUs")
 		})
@@ -359,7 +359,7 @@ var _ = Describe("SimFleet status", func() {
 				scalev1alpha1.SimInstanceChildrenCreated,
 			)...)
 
-			status := aggregateStatus(fleet, instances, 1)
+			status := aggregateStatus(fleet, instances, 1, true)
 
 			Expect(status.CreatedInstances).To(Equal(2), "createdInstances")
 			Expect(status.GuestReadyInstances).To(Equal(0), "guestReadyInstances")
@@ -376,7 +376,7 @@ var _ = Describe("SimFleet status", func() {
 				scalev1alpha1.SimInstanceChildrenCreated,
 			)...)
 
-			status := aggregateStatus(fleet, instances, 1)
+			status := aggregateStatus(fleet, instances, 1, true)
 
 			Expect(status.CreatedInstances).To(Equal(2), "createdInstances without a template")
 			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionTrue, "Ready")
@@ -388,10 +388,53 @@ var _ = Describe("SimFleet status", func() {
 			fleet := rolloutFleet(1, 1, 1)
 			fleet.Spec.VirtualMachineTemplate.Storage = &scalev1alpha1.VirtualMachineStorage{Ephemeral: ptr.To(false)}
 
-			status := aggregateStatus(fleet, nil, 0)
+			status := aggregateStatus(fleet, nil, 0, true)
 
 			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionFalse, "UnsupportedStorage")
 			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionFalse, "UnsupportedStorage")
+		})
+
+		It("reports KubeVirtNotInstalled for a virtual machine fleet on a cluster without KubeVirt", func() {
+			fleet := rolloutFleet(1, 1, 1)
+
+			status := aggregateStatus(fleet, nil, 0, false)
+
+			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionFalse, "KubeVirtNotInstalled")
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionFalse, "KubeVirtNotInstalled")
+		})
+
+		It("reports a pod fleet ready without KubeVirt", func() {
+			fleet := rolloutFleet(2, 2, 2)
+			fleet.Spec.VirtualMachineTemplate = nil
+			fleet.Spec.PodTemplate = &scalev1alpha1.PodTemplate{Image: "example.com/node@sha256:test"}
+			instances := instanceMap(
+				observedInstance(fleet, 0, scalev1alpha1.SimInstanceReady, "dpu-0", readyInstanceConditions...),
+				observedInstance(fleet, 1, scalev1alpha1.SimInstanceReady, "dpu-1", readyInstanceConditions...),
+			)
+
+			status := aggregateStatus(fleet, instances, 1, false)
+
+			Expect(status.GuestReadyInstances).To(Equal(2), "guestReadyInstances")
+			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionTrue, "Ready")
+		})
+
+		It("waits for a pod fleet's guests", func() {
+			fleet := rolloutFleet(2, 2, 2)
+			fleet.Spec.VirtualMachineTemplate = nil
+			fleet.Spec.PodTemplate = &scalev1alpha1.PodTemplate{Image: "example.com/node@sha256:test"}
+			instances := instanceMap(
+				observedInstance(fleet, 0, scalev1alpha1.SimInstanceReady, "dpu-0", readyInstanceConditions...),
+				observedInstance(fleet, 1, scalev1alpha1.SimInstanceProvisioning, "dpu-1",
+					scalev1alpha1.SimInstanceCredentialsReady,
+					scalev1alpha1.SimInstanceDeviceCreated,
+					scalev1alpha1.SimInstanceChildrenCreated,
+				),
+			)
+
+			status := aggregateStatus(fleet, instances, 1, false)
+
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionFalse, "WaitingForGuests")
 		})
 
 		It("reports a blocked credential", func() {
@@ -400,7 +443,7 @@ var _ = Describe("SimFleet status", func() {
 			setInstanceCondition(blocked, scalev1alpha1.SimInstanceCredentialsReady, false,
 				"OwnershipConflict", "ServiceAccount is controlled by another owner")
 
-			status := aggregateStatus(fleet, instanceMap(blocked), 0)
+			status := aggregateStatus(fleet, instanceMap(blocked), 0, true)
 
 			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionFalse, "OwnershipConflict")
 		})
