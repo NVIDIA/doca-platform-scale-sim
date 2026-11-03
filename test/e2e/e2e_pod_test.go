@@ -47,11 +47,14 @@ const (
 	podReplicas = 1
 
 	// dpuServiceName and dpuServiceLabelKey match testdata/pod/dpuservice.yaml.
-	// DPF labels the pods of every DPUService it deploys with
-	// dpuServiceLabelKey, so listing by the key finds them whatever namespace
-	// the chart lands in on the DPU cluster.
+	// The hello-world chart in testdata/pod/dpuservice.yaml does not template
+	// serviceDaemonSet.labels onto its Pods, so DPF's service label never
+	// reaches them. They carry the chart's own name label instead; selecting
+	// by it finds them whatever namespace the chart lands in on the DPU
+	// cluster.
 	dpuServiceName     = "e2e-hello"
-	dpuServiceLabelKey = "svc.dpu.nvidia.com/service"
+	dpuServiceLabelKey = "app.kubernetes.io/name"
+	dpuServiceLabelVal = "hello-world"
 
 	// podProvisioningTimeout covers DPF claiming the device, the Redfish flow
 	// against the mock BMC in the Pod, the BFB install, and the Pod's
@@ -219,12 +222,12 @@ func expectPodInstanceProvisioned(g Gomega, ordinal int) {
 }
 
 // expectDPUServicePodRunning looks for a DPUService Pod in the DPU cluster and
-// requires it to be Running on the simulated DPU's Node. The DPU cluster's own
-// system Pods carry no DPF service label, so every Pod found is a DPUService's.
+// requires it to be Running on the simulated DPU's Node. It selects the
+// hello-world chart's Pods by their app.kubernetes.io/name label.
 func expectDPUServicePodRunning(g Gomega, tenant client.Client, nodeName string) {
 	pods := &corev1.PodList{}
-	g.Expect(tenant.List(context.Background(), pods, client.HasLabels{dpuServiceLabelKey})).To(Succeed())
-	g.Expect(pods.Items).NotTo(BeEmpty(), "the DPU cluster has no Pod labelled %s", dpuServiceLabelKey)
+	g.Expect(tenant.List(context.Background(), pods, client.MatchingLabels{dpuServiceLabelKey: dpuServiceLabelVal})).To(Succeed())
+	g.Expect(pods.Items).NotTo(BeEmpty(), "the DPU cluster has no Pod labelled %s=%s", dpuServiceLabelKey, dpuServiceLabelVal)
 	running := 0
 	for _, pod := range pods.Items {
 		if pod.Spec.NodeName == nodeName && pod.Status.Phase == corev1.PodRunning {

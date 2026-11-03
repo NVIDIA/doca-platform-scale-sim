@@ -233,8 +233,10 @@ POD_E2E_SERVICE_SUBNET ?= 10.112.0.0/16
 # image. It is loaded into Kind and never published.
 override E2E_NODE_CONTAINER_IMG := simfleet-node-container:local
 # The pod path has no guest boot, so this is DPF provisioning, the DPU Pod's
-# inner kubelet join, and the DPUService chart and image pulls.
-E2E_POD_TEST_TIMEOUT ?= 60m
+# inner kubelet join, and the DPUService chart and image pulls. The spec's own
+# waits sum to about 63m, so the process timeout sits above that with room for
+# the AfterEach diagnostics.
+E2E_POD_TEST_TIMEOUT ?= 90m
 
 .PHONY: test-e2e-pod
 test-e2e-pod: check-e2e-host kind ## Run the pod-runtime e2e tests on Kind with DPF and no KubeVirt.
