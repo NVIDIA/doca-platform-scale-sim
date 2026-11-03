@@ -2,14 +2,23 @@ name: e2e
 
 # The suite builds a Kind cluster with DPF and KubeVirt and runs for up to two
 # hours, so it is opt-in on pull requests (add the e2e label) and runs on
-# every push to main. The pod runtime suite is manual only: start it with
-# workflow_dispatch.
+# every push to main. The pod runtime suite is manual only. A workflow_dispatch
+# run picks one suite so the two jobs do not start together.
 on:
   push:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Which e2e suite to run
+        type: choice
+        options:
+          - vm
+          - pod
+          - both
+        default: vm
 
 permissions:
   contents: read
@@ -20,7 +29,10 @@ concurrency:
 
 jobs:
   e2e:
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    if: >-
+      (github.event_name == 'push') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e')) ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.suite == 'vm' || github.event.inputs.suite == 'both'))
     runs-on: ubuntu-latest
     # Must exceed E2E_TEST_TIMEOUT (119m) plus the cluster, DPF, KubeVirt and
     # node image setup, or the job is killed before the suite reports.
@@ -116,7 +128,7 @@ jobs:
   # The pod runtime has no KubeVirt, so it needs neither /dev/kvm nor the VM
   # node image. It builds the node container image itself.
   e2e-pod:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.suite == 'pod' || github.event.inputs.suite == 'both')
     runs-on: ubuntu-latest
     # Must exceed E2E_POD_TEST_TIMEOUT (90m) plus the cluster, DPF and node
     # container image setup, or the job is killed before the suite reports.
