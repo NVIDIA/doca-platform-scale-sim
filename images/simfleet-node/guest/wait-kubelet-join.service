@@ -1,6 +1,6 @@
 [Unit]
 Description=Configure kubelet from the DPF join Secret
-ConditionPathExists=/etc/dpf-sim/identity.env
+ConditionPathExists=/etc/dpf-sim/mgmt.kubeconfig
 After=network-online.target cloud-final.service containerd.service
 Wants=network-online.target
 # Deliberately not ordered against mock-dpuagent.service. DPF only publishes

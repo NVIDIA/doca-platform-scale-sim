@@ -121,6 +121,8 @@ test_container_image_contract() {
 	assert_contains '/opt/dpf/mock-dpuagent' "${dockerfile}"
 	assert_contains 'guest/wait-kubelet-join.sh /opt/dpf/wait-kubelet-join.sh' "${dockerfile}"
 	assert_contains 'systemctl enable mock-dpuagent.service wait-kubelet-join.service' "${dockerfile}"
+	# A container has no cloud-init.target, so both units move to multi-user.target.
+	assert_contains "sed -i 's/^WantedBy=cloud-init.target\$/WantedBy=multi-user.target/'" "${dockerfile}"
 	assert_contains 'guest/10-flannel.conflist /etc/cni/net.d/10-flannel.conflist' "${dockerfile}"
 	assert_contains 'guest/kubeadm-join.args /usr/lib/dpf-sim/kubeadm-join.args' "${dockerfile}"
 	assert_contains 'guest/kubeadm-patches/ /usr/lib/dpf-sim/kubeadm-patches/' "${dockerfile}"
@@ -370,7 +372,7 @@ test_recipe_contract() {
 
 	assert_contains 'ExecStart=/opt/dpf/wait-kubelet-join.sh' \
 		"${ROOT}/guest/wait-kubelet-join.service"
-	assert_contains 'ConditionPathExists=/etc/dpf-sim/identity.env' \
+	assert_contains 'ConditionPathExists=/etc/dpf-sim/mgmt.kubeconfig' \
 		"${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'Type=oneshot' "${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'Restart=on-failure' "${ROOT}/guest/wait-kubelet-join.service"
@@ -1253,7 +1255,9 @@ run_join_helper() {
 }
 
 # test_join_args_hook checks append_image_join_args without running the join loop.
-test_join_args_hook() {
+# The body is a subshell, so sourcing the helper cannot replace fail() or any
+# other function or variable of this shell.
+test_join_args_hook() (
 	local hook_tmp="${TMP}/join-args-hook"
 	rm -rf "${hook_tmp}"
 	mkdir -p "${hook_tmp}"
@@ -1308,7 +1312,7 @@ test_join_args_hook() {
 	test "${join_argv[5]}" = '--v=3' \
 		&& test "${join_argv[6]}" = '--v=4' \
 		|| fail "blank lines were not skipped"
-}
+)
 
 test_join_helper_configures_kubelet_from_the_secret() {
 	local root
@@ -1963,7 +1967,10 @@ STUB
 np_run() {
 	local name="$1"
 	shift
-	env PATH="${NP_STUB}/bin:${PATH}" NP_STUB="${NP_STUB}" \
+	# The caller's environment must not move the floors: only the VAR=value
+	# arguments may set them.
+	env -u INOTIFY_MAX_USER_INSTANCES -u INOTIFY_MAX_USER_WATCHES -u DPU_SLOTS \
+		PATH="${NP_STUB}/bin:${PATH}" NP_STUB="${NP_STUB}" \
 		NODE_PREP_CGROUP_ROOT="${NP_STUB}/cgroup" \
 		NODE_PREP_SYS_MODULE="${NP_STUB}/sys-module" \
 		"$@" bash "${ROOT}/guest/node-prep.sh" > "${TMP}/node-prep-${name}.out" 2>&1

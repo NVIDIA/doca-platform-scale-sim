@@ -128,8 +128,8 @@ printf 'nameserver 169.254.2.3\n' > /etc/resolv.conf
 apt-get update
 apt-get install -y --no-install-recommends \
 	qemu-guest-agent
-# qemu-guest-agent.service is intentionally static on Ubuntu. The package's
-# udev rule starts it when the org.qemu.guest_agent.0 virtio port appears.
+# qemu-guest-agent.service is intentionally static on Ubuntu. The udev rule
+# in the package starts it when the org.qemu.guest_agent.0 virtio port appears.
 
 # kubeadm preflight expects both modules loaded.
 cat > /etc/modules-load.d/simfleet.conf << 'MODULES_EOF'
