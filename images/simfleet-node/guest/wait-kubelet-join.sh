@@ -138,6 +138,24 @@ validate_join_command() {
 	[ "${seen_token}" -eq 1 ] && [ "${seen_hash}" -eq 1 ]
 }
 
+JOIN_ARGS_FILE="${JOIN_ARGS_FILE:-/usr/lib/dpf-sim/kubeadm-join.args}"
+
+# append_image_join_args adds the container image's extra kubeadm arguments.
+# The file is root-owned image content, not the join Secret, so its lines are
+# not checked against the Secret grammar. A missing file is the VM image.
+append_image_join_args() {
+	[ -f "${JOIN_ARGS_FILE}" ] || return 0
+	local line
+	while IFS= read -r line || [ -n "${line}" ]; do
+		[ -n "${line}" ] || continue
+		join_argv+=("${line}")
+	done < "${JOIN_ARGS_FILE}"
+}
+
+if [ "${WAIT_KUBELET_JOIN_SOURCE_ONLY:-}" = 1 ]; then
+	return 0 2>/dev/null || exit 0
+fi
+
 if [ -s "${KUBELET_CONF}" ]; then
 	log "kubelet is already configured at ${KUBELET_CONF}"
 	exit 0
@@ -295,5 +313,6 @@ fi
 # this node under the guest hostname, while DPF and the e2e contract both
 # expect the tenant Node to be named after the DPU.
 log "joining the tenant cluster as ${dpu_name}"
+append_image_join_args
 "${join_argv[@]}" --node-name="${dpu_name}"
 log "kubelet is configured; mock-dpuagent owns the official kubelet start"

@@ -1114,6 +1114,64 @@ run_join_helper() {
 	) > "${root}/out" 2>&1
 }
 
+# test_join_args_hook checks append_image_join_args without running the join loop.
+test_join_args_hook() {
+	local hook_tmp="${TMP}/join-args-hook"
+	rm -rf "${hook_tmp}"
+	mkdir -p "${hook_tmp}"
+
+	source_join_hook() {
+		# shellcheck disable=SC1090
+		WAIT_KUBELET_JOIN_SOURCE_ONLY=1 \
+			source "${ROOT}/guest/wait-kubelet-join.sh"
+	}
+
+	JOIN_ARGS_FILE="${hook_tmp}/missing.args"
+	source_join_hook
+	join_argv=(kubeadm join 10.0.0.1:6443 --token abcdef.0123456789abcdef)
+	append_image_join_args
+	test "${#join_argv[@]}" -eq 5 \
+		|| fail "missing join args file changed join_argv length (got ${#join_argv[@]})"
+	test "${join_argv[0]}" = kubeadm \
+		&& test "${join_argv[4]}" = abcdef.0123456789abcdef \
+		|| fail "missing join args file changed join_argv contents"
+
+	printf '%s\n' \
+		'--patches=/usr/lib/dpf-sim/kubeadm-patches' \
+		'--v=2' > "${hook_tmp}/present.args"
+	JOIN_ARGS_FILE="${hook_tmp}/present.args"
+	source_join_hook
+	join_argv=(kubeadm join 10.0.0.1:6443 --token abcdef.0123456789abcdef)
+	append_image_join_args
+	test "${#join_argv[@]}" -eq 7 \
+		|| fail "present join args file: expected 7 argv entries, got ${#join_argv[@]}"
+	test "${join_argv[5]}" = '--patches=/usr/lib/dpf-sim/kubeadm-patches' \
+		|| fail "first appended join arg missing or out of order"
+	test "${join_argv[6]}" = '--v=2' \
+		|| fail "second appended join arg missing or out of order"
+
+	printf '%s\n' '$(echo pwned)' > "${hook_tmp}/literal.args"
+	JOIN_ARGS_FILE="${hook_tmp}/literal.args"
+	source_join_hook
+	join_argv=(kubeadm join 10.0.0.1:6443 --token abcdef.0123456789abcdef)
+	append_image_join_args
+	test "${#join_argv[@]}" -eq 6 \
+		|| fail "literal join arg: expected 6 argv entries, got ${#join_argv[@]}"
+	test "${join_argv[5]}" = '$(echo pwned)' \
+		|| fail "join arg line was interpreted instead of appended literally"
+
+	printf '\n--v=3\n\n--v=4\n' > "${hook_tmp}/blank-lines.args"
+	JOIN_ARGS_FILE="${hook_tmp}/blank-lines.args"
+	source_join_hook
+	join_argv=(kubeadm join 10.0.0.1:6443 --token abcdef.0123456789abcdef)
+	append_image_join_args
+	test "${#join_argv[@]}" -eq 7 \
+		|| fail "blank lines: expected 7 argv entries, got ${#join_argv[@]}"
+	test "${join_argv[5]}" = '--v=3' \
+		&& test "${join_argv[6]}" = '--v=4' \
+		|| fail "blank lines were not skipped"
+}
+
 test_join_helper_configures_kubelet_from_the_secret() {
 	local root
 	root="$(join_helper_env valid)"
@@ -1714,6 +1772,7 @@ test_cached_build_reuses_matching_source_hash
 test_cached_build_rebuilds_on_recipe_change
 test_cached_build_rebuilds_on_image_version_change
 test_cached_build_never_trusts_a_bare_tag
+test_join_args_hook
 test_join_helper_configures_kubelet_from_the_secret
 test_join_helper_is_idempotent_once_kubelet_is_configured
 test_join_helper_waits_for_configure_kubelet
