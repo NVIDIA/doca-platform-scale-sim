@@ -114,16 +114,22 @@ test_recipe_contract() {
 	# The guest has to be ready for kubeadm join, not merely have the binaries.
 	assert_contains 'containerd config default > /etc/containerd/config.toml' "${ROOT}/guest/install.sh"
 	assert_contains 'SystemdCgroup = true' "${ROOT}/guest/install.sh"
-	assert_contains '/etc/modules-load.d/simfleet.conf' "${ROOT}/guest/install.sh"
 	assert_contains '/etc/sysctl.d/99-simfleet-k8s.conf' "${ROOT}/guest/install.sh"
 	assert_contains 'systemctl enable containerd' "${ROOT}/guest/install.sh"
+	# VM-only steps live in customize-disk.sh, not the shared guest/install.sh.
+	assert_contains '/etc/modules-load.d/simfleet.conf' "${ROOT}/customize-disk.sh"
+	assert_absent '/etc/modules-load.d/simfleet.conf' "${ROOT}/guest/install.sh"
+	assert_absent 'systemctl enable qemu-guest-agent.service' "${ROOT}/customize-disk.sh"
 	assert_absent 'systemctl enable qemu-guest-agent.service' "${ROOT}/guest/install.sh"
-	assert_contains $'\tqemu-guest-agent' "${ROOT}/guest/install.sh"
-	# apt in the guest has no DNS under virt-customize unless install.sh
+	assert_contains $'\tqemu-guest-agent' "${ROOT}/customize-disk.sh"
+	assert_absent 'qemu-guest-agent' "${ROOT}/guest/install.sh"
+	# apt in the guest has no DNS under virt-customize unless customize-disk.sh
 	# provides one, and the build-time resolver must not ship in the image.
 	assert_contains 'printf '"'"'nameserver 169.254.2.3\n'"'"' > /etc/resolv.conf' \
-		"${ROOT}/guest/install.sh"
-	assert_contains 'trap restore_resolv EXIT' "${ROOT}/guest/install.sh"
+		"${ROOT}/customize-disk.sh"
+	assert_contains 'trap restore_resolv EXIT' "${ROOT}/customize-disk.sh"
+	assert_absent '169.254.2.3' "${ROOT}/guest/install.sh"
+	assert_absent 'restore_resolv' "${ROOT}/guest/install.sh"
 	assert_contains 'apt-get clean' "${ROOT}/guest/install.sh"
 	assert_contains 'rm -rf /var/lib/apt/lists' "${ROOT}/guest/install.sh"
 	assert_contains 'apt-get install -y --no-install-recommends \' "${ROOT}/guest/install.sh"

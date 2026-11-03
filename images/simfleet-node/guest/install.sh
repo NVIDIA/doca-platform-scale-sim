@@ -24,37 +24,10 @@ KUBE_VERSION="v${KUBE_APT_VERSION%%-*}"
 # pkgs.k8s.io publishes one apt repository per minor release.
 KUBE_MINOR="${KUBE_VERSION%.*}"
 
-# The base image points /etc/resolv.conf at systemd-resolved's 127.0.0.53
-# stub, and resolved does not run under virt-customize, so every apt lookup
-# fails with "Temporary failure resolving". The libguestfs appliance configures
-# QEMU user networking as 169.254.2.0/16, whose resolver is 169.254.2.3. Use it
-# for the duration of the install and put the original back afterwards, so the
-# shipped guest keeps its own configuration rather than this build-time one.
-RESOLV_BACKUP=""
-RESOLV_WAS_LINK=""
-if [ -L /etc/resolv.conf ]; then
-	RESOLV_WAS_LINK="$(readlink /etc/resolv.conf)"
-elif [ -e /etc/resolv.conf ]; then
-	RESOLV_BACKUP=/etc/resolv.conf.simfleet-build
-	cp -a /etc/resolv.conf "${RESOLV_BACKUP}"
-fi
-restore_resolv() {
-	rm -f /etc/resolv.conf
-	if [ -n "${RESOLV_WAS_LINK}" ]; then
-		ln -s "${RESOLV_WAS_LINK}" /etc/resolv.conf
-	elif [ -n "${RESOLV_BACKUP}" ]; then
-		mv "${RESOLV_BACKUP}" /etc/resolv.conf
-	fi
-}
-trap restore_resolv EXIT
-rm -f /etc/resolv.conf
-printf 'nameserver 169.254.2.3\n' > /etc/resolv.conf
-
 apt-get update
 apt-get install -y --no-install-recommends \
 	apt-transport-https ca-certificates curl gpg \
-	containerd \
-	qemu-guest-agent
+	containerd
 
 # kubeadm requires the CRI plugin enabled and runc on the systemd cgroup
 # driver, which is not Ubuntu's packaged default. Regenerate the whole file so
@@ -78,16 +51,8 @@ if grep -Eq '^[[:space:]]*disabled_plugins[[:space:]]*=.*cri' /etc/containerd/co
 fi
 
 systemctl enable containerd
-# qemu-guest-agent.service is intentionally static on Ubuntu. The package's
-# udev rule starts it when the org.qemu.guest_agent.0 virtio port appears.
 
-# kubeadm preflight expects both modules loaded and all three sysctls set.
-cat > /etc/modules-load.d/simfleet.conf << 'EOF'
-overlay
-br_netfilter
-EOF
-chmod 0644 /etc/modules-load.d/simfleet.conf
-
+# kubeadm preflight expects all three sysctls set.
 cat > /etc/sysctl.d/99-simfleet-k8s.conf << 'EOF'
 net.bridge.bridge-nf-call-iptables = 1
 net.bridge.bridge-nf-call-ip6tables = 1
