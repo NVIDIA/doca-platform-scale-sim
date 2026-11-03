@@ -438,7 +438,8 @@ var _ = Describe("SimFleet", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to build the tenant client")
 		Eventually(func(g Gomega) {
 			for ordinal := range replicas {
-				expectDPUAgentJoined(g, tenant, fleetDPUName(ordinal))
+				dpu, node := expectDPUAgentJoined(g, tenant, fleetDPUName(ordinal))
+				expectNodeJoinedInConfigureKubelet(g, dpu, node)
 			}
 		}, dpuProvisioningTimeout(), 5*time.Second).Should(Succeed())
 
@@ -451,6 +452,17 @@ var _ = Describe("SimFleet", Ordered, func() {
 			}
 			expectFleetCounts(g, replicas)
 		}).Should(Succeed())
+
+		By("verifying every guest's mock DPU agent applied the fleet's phase delays")
+		phaseList := objectJSONPath("simfleet", fleetName, fleetNamespace,
+			`{range .spec.dpuAgent.phaseDelays[*]}{.phase}{"\n"}{end}`)
+		Expect(strings.TrimSpace(phaseList)).NotTo(BeEmpty(), "testdata/simfleet.yaml delays no phase")
+		phases := strings.Split(strings.TrimSpace(phaseList), "\n")
+		Eventually(func(g Gomega) {
+			for ordinal := range replicas {
+				expectPhaseDelaysApplied(g, naming.VirtualMachineName(fleetName, ordinal), phases)
+			}
+		}, time.Minute, 5*time.Second).Should(Succeed())
 	})
 
 	It("replaces an ordinal whose VirtualMachine was deleted", func() {

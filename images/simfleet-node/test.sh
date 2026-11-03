@@ -1013,23 +1013,36 @@ join_helper_env() {
 	printf 'DPU_NAME=e2e-fleet-host-0000-e2e-fleet-device-000000\nDPU_NAMESPACE=dpf-operator-system\n' \
 		> "${root}/etc/identity.env"
 	printf 'apiVersion: v1\nkind: Config\n' > "${root}/etc/mgmt.kubeconfig"
-	# kubectl serves the two reads the helper makes: the DPU's UID, and one
-	# combined Secret read carrying both the owner references and the base64
-	# .data.join. Each is separately controllable so a case can make exactly one
-	# of them hostile. FAKE_SWAPPED_JOIN_COMMAND answers every read after the
-	# first with different bytes, which is how a case proves the helper only
-	# ever reads the Secret once.
+	# kubectl serves the two reads the helper makes: the DPU's UID, phase and
+	# KubeletConfigured status, and one combined Secret read carrying both the
+	# owner references and the base64 .data.join. Each is separately
+	# controllable so a case can make exactly one of them hostile.
+	# FAKE_DPU_STATES answers the Nth DPU read with its Nth "phase|status" line,
+	# repeating the last one, and "absent" stands for a DPU that is not there.
+	# FAKE_SWAPPED_JOIN_COMMAND answers every read after the first with
+	# different bytes, which is how a case proves the helper only ever reads
+	# the Secret once.
 	cat > "${root}/bin/kubectl" << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"${JOIN_CALLS}"
 case "$*" in
   *"get dpu "*)
-    if [ -z "${FAKE_DPU_UID:-}" ]; then
+    state="DPU Cluster Config|True"
+    if [ -n "${FAKE_DPU_STATES:-}" ]; then
+      dpu_reads_file="${JOIN_CALLS}.dpu-reads"
+      printf 'x' >>"${dpu_reads_file}"
+      dpu_reads="$(wc -c <"${dpu_reads_file}" | tr -d ' ')"
+      state="$(printf '%s\n' "${FAKE_DPU_STATES}" | sed -n "${dpu_reads}p")"
+      if [ -z "${state}" ]; then
+        state="$(printf '%s\n' "${FAKE_DPU_STATES}" | tail -n 1)"
+      fi
+    fi
+    if [ -z "${FAKE_DPU_UID:-}" ] || [ "${state}" = absent ]; then
       echo "dpus.provisioning.dpu.nvidia.com not found" >&2
       exit 1
     fi
-    printf '%s' "${FAKE_DPU_UID}"
+    printf '%s|%s' "${FAKE_DPU_UID}" "${state}"
     ;;
   *"get secret "*)
     if [ -z "${FAKE_SECRET_RESPONSE:-}" ]; then
@@ -1314,6 +1327,86 @@ test_join_helper_waits_for_the_dpu_before_reading_the_secret() {
 	assert_absent 'kubeadm-arg' "${root}/calls"
 	# Without a DPU to check against, the Secret is never read at all.
 	assert_absent 'get secret ' "${root}/calls"
+}
+
+# On a real DPU the agent's Configure Kubelet step joins the tenant cluster,
+# inside DPU Cluster Config. Joining as soon as the Secret exists registers the
+# Node before OS Installing has even finished, which makes every phase delay
+# up to DPU Cluster Config invisible to the DPF controller.
+test_join_helper_waits_for_configure_kubelet() {
+	local root
+	root="$(join_helper_env configure-kubelet-gate)"
+	: > "${root}/calls"
+
+	# Waiting for DPF to reach the step is not a failed attempt: two attempts
+	# would not survive four gated reads if it were.
+	run_join_helper "${root}" "FAKE_JOIN_COMMAND=${VALID_JOIN_COMMAND}" \
+		"FAKE_DPU_STATES=OS Installing|
+OS Installing|
+DPU Cluster Config|False
+DPU Cluster Config|True" \
+		|| {
+			cat "${root}/out" >&2
+			fail "the join helper did not join once the agent configured kubelet"
+		}
+
+	local dpu_reads
+	dpu_reads="$(grep -c 'get dpu ' "${root}/calls" || true)"
+	test "${dpu_reads}" = "4" \
+		|| fail "the join helper read the DPU ${dpu_reads} times; expected 4"
+	assert_secret_read_once "${root}/calls"
+	assert_contains 'kubeadm-arg join' "${root}/calls"
+	# A gate that can stay closed for half an hour logs on change, not per poll.
+	local waits
+	waits="$(grep -c 'phase OS Installing' "${root}/out" || true)"
+	test "${waits}" = "1" \
+		|| fail "the join helper logged the same wait ${waits} times; expected once"
+	assert_contains 'phase DPU Cluster Config' "${root}/out"
+	assert_absent 'attempt ' "${root}/out"
+}
+
+# The agent resets its conditions in memory at the start of a run and only
+# pushes them with its first status update, so a KubeletConfigured=True from
+# an earlier run can sit on the DPU through a long OS Installing delay. The
+# phase is what the controller moves, and it cannot be DPU Cluster Config
+# until this run's DPU Config is over.
+test_join_helper_ignores_kubelet_configured_outside_its_phase() {
+	local phase root
+	for phase in "OS Installing" "Rebooting" "DPU Config" "Service Readiness"; do
+		root="$(join_helper_env "stale-${phase// /-}")"
+		: > "${root}/calls"
+
+		# The DPU then disappears, which is the only way to end a wait that
+		# would otherwise last as long as the guest.
+		if run_join_helper "${root}" "FAKE_JOIN_COMMAND=${VALID_JOIN_COMMAND}" \
+			"FAKE_DPU_STATES=${phase}|True
+absent"; then
+			fail "the join helper joined on KubeletConfigured=True during ${phase}"
+		fi
+		assert_absent 'get secret ' "${root}/calls"
+		assert_absent 'kubeadm-arg' "${root}/calls"
+	done
+}
+
+# Phase, condition and UID come from one read, so the gate and the provenance
+# check describe the same DPU object.
+test_join_helper_reads_its_gate_with_the_dpu_uid() {
+	local root
+	root="$(join_helper_env gate-request)"
+	: > "${root}/calls"
+	run_join_helper "${root}" "FAKE_JOIN_COMMAND=${VALID_JOIN_COMMAND}" > /dev/null \
+		|| {
+			cat "${root}/out" >&2
+			fail "the join helper rejected a valid join Secret"
+		}
+
+	local request
+	request="$(grep -m1 'get dpu ' "${root}/calls")"
+	for fragment in '{.metadata.uid}' '{.status.phase}' \
+		'{.status.agentStatus.conditions[?(@.type=="KubeletConfigured")].status}'; do
+		grep -Fq -- "${fragment}" <<< "${request}" \
+			|| fail "the DPU request does not read ${fragment}"
+	done
 }
 
 test_join_helper_is_idempotent_once_kubelet_is_configured() {
@@ -1623,6 +1716,9 @@ test_cached_build_rebuilds_on_image_version_change
 test_cached_build_never_trusts_a_bare_tag
 test_join_helper_configures_kubelet_from_the_secret
 test_join_helper_is_idempotent_once_kubelet_is_configured
+test_join_helper_waits_for_configure_kubelet
+test_join_helper_ignores_kubelet_configured_outside_its_phase
+test_join_helper_reads_its_gate_with_the_dpu_uid
 test_join_helper_retries_until_the_secret_exists
 test_join_helper_refuses_anything_but_a_kubeadm_join
 test_join_helper_requires_dpf_provenance

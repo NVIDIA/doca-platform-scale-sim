@@ -13,8 +13,9 @@ Type=oneshot
 RemainAfterExit=yes
 StandardOutput=journal+console
 StandardError=journal+console
-# The Secret can take many minutes to appear; the helper bounds its own wait
-# and exits non-zero so systemd owns the retry.
+# The helper waits as long as the agent needs to reach Configure Kubelet,
+# which the fleet's phase delays can stretch to hours. It bounds only its
+# retries on failed reads and exits non-zero so systemd owns those.
 TimeoutStartSec=0
 ExecStart=/opt/dpf/wait-kubelet-join.sh
 Restart=on-failure

@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
@@ -388,6 +389,33 @@ func dumpVMIContainerLog(vmiName, container, description string) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "%s %s:\n%s", vmiName, description, redactGuestCredentials(output))
 }
 
+// expectPhaseDelaysApplied checks the guest's serial console, where
+// mock-dpuagent logs, for each phase the fleet delays: the startup line that
+// shows the rendered config reached the mock, and a step line that shows a
+// delay was drawn. klog quotes the phase value, but it is matched either way so
+// a change in how a named string type is printed cannot fail the check.
+func expectPhaseDelaysApplied(g Gomega, vmiName string, phases []string) {
+	console, err := run(exec.Command(
+		"kubectl", "logs", "-n", fleetNamespace,
+		"-l", "vm.kubevirt.io/name="+vmiName,
+		"-c", "guest-console-log", "--tail=-1",
+	))
+	g.Expect(err).NotTo(HaveOccurred(), "read the serial console of %s", vmiName)
+	var matched []string
+	for _, phase := range phases {
+		for _, msg := range []string{"DPU phase delayed", "DPU phase delay"} {
+			line := regexp.MustCompile(`[^\n]*` + regexp.QuoteMeta(`"`+msg+`"`) + ` phase="?` +
+				regexp.QuoteMeta(phase) + `"?(\s[^\n]*)?(\n|$)`)
+			lines := line.FindAllString(console, -1)
+			g.Expect(lines).NotTo(BeEmpty(), "%s serial console has no %q line for phase %q", vmiName, msg, phase)
+			for _, l := range lines {
+				matched = append(matched, strings.TrimSpace(l))
+			}
+		}
+	}
+	_, _ = fmt.Fprintf(GinkgoWriter, "%s applied phase delays %q:\n  %s\n", vmiName, phases, strings.Join(matched, "\n  "))
+}
+
 // redactGuestCredentials drops the lines that carry credential material and
 // keeps the rest. The agent logs the path of its kubeconfig, so redacting a
 // whole dump on sight of that path would hide the failure it was collected for.
@@ -424,6 +452,18 @@ func expectDPUAgentJoined(g Gomega, tenant client.Client, dpuName string) (*prov
 	g.Expect(tenant.Get(context.Background(), client.ObjectKey{Name: dpu.Name}, node)).To(Succeed(),
 		"tenant Node %s is missing", dpu.Name)
 	return dpu, node
+}
+
+// expectNodeJoinedInConfigureKubelet fails when the tenant Node was created
+// before the agent finished Configure Kubelet, which is when a real DPU joins.
+// A guest that joined earlier makes the controller see DPU Cluster Config as
+// already done, so the phase delays up to it would gate nothing.
+func expectNodeJoinedInConfigureKubelet(g Gomega, dpu *provisioningv1.DPU, node *corev1.Node) {
+	configured := meta.FindStatusCondition(dpu.Status.AgentStatus.Conditions, kubeletConfiguredCondition)
+	g.Expect(configured).NotTo(BeNil(), "%s has no %s condition", dpu.Name, kubeletConfiguredCondition)
+	g.Expect(node.CreationTimestamp.Before(&configured.LastTransitionTime)).To(BeFalse(),
+		"tenant Node %s was created at %s, before %s became True at %s",
+		node.Name, node.CreationTimestamp, kubeletConfiguredCondition, configured.LastTransitionTime)
 }
 
 // expectDPUAgentRejoined is expectDPUAgentJoined for a DPU whose guest was

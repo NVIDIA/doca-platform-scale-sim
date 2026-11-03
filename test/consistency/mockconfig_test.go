@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	mockconfig "github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/config"
+	"github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/phasedelay"
 	"github.com/nvidia/doca-platform/test/mock/dpuagent/pkg/redfish"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -119,5 +120,29 @@ var _ = Describe("Mock dpuagent", func() {
 			problems = append(problems, "mock accepts an unknown operation name; the probe no longer tells anything")
 		}
 		Expect(problems).To(BeEmpty())
+	})
+
+	It("lists exactly the phases upstream can delay, in order", func() {
+		var upstream []string
+		for _, phase := range phasedelay.SupportedPhases() {
+			upstream = append(upstream, string(phase))
+		}
+		Expect(scalev1alpha1.MockDelayablePhases).To(Equal(upstream), "MockDelayablePhases")
+	})
+
+	// SupportedPhases is the mock's own list, but the config parser is what
+	// refuses to start, so hold the list to the parser as well.
+	It("accepts exactly the MockDelayablePhases delays", func() {
+		accepts := func(phase string) bool {
+			_, err := mockconfig.Parse(fmt.Appendf(nil, "dpuType: bf3\nphaseDelays:\n- phase: %s\n  maxSeconds: 1\n", phase))
+			return err == nil
+		}
+		for _, phase := range scalev1alpha1.MockDelayablePhases {
+			Expect(accepts(phase)).To(BeTrue(), "mock refuses a delay for %q", phase)
+		}
+		for _, phase := range []string{"Ready", "Perform ARM Force Restart"} {
+			Expect(accepts(phase)).To(BeFalse(),
+				"mock accepts %q, which MockDelayablePhases leaves out; the probe no longer tells anything", phase)
+		}
 	})
 })

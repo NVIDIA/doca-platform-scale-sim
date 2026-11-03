@@ -22,7 +22,8 @@ set -euo pipefail
 # something in the guest has to turn DPF's join Secret into kubelet
 # configuration first. Cloud-init cannot: the join command is a bearer
 # credential that DPF only publishes once the DPU exists, which is long after
-# the VirtualMachine booted.
+# the VirtualMachine booted. It joins only once the mock has finished
+# Configure Kubelet in DPU Cluster Config, where the real agent joins.
 #
 # The credential cloud-init installs can read exactly two things: this guest's
 # DPU and that DPU's join Secret. Both reads are used. The Secret's provenance
@@ -37,9 +38,13 @@ set -euo pipefail
 # independently and both steps are idempotent:
 #
 #   - this script exits 0 immediately once kubelet.conf is in place;
-#   - a kubelet the mock started without configuration crash-loops until
-#     kubeadm writes that configuration, and kubeadm restarts it afterwards;
+#   - the mock's Start Kubelet step can run before the next poll sees
+#     KubeletConfigured; the kubelet it starts without configuration
+#     crash-loops until kubeadm writes that configuration and restarts it;
 #   - the mock's Start Kubelet step is a no-op on an already running unit.
+#
+# The mock's simulated reboots do not restart the VM, so after the first join
+# the kubelet stays up through any later Rebooting and DPU Cluster Config.
 #
 # It deliberately leaves kubelet running afterwards rather than stopping it so
 # the mock can be the official start. Stopping a joined kubelet after the mock
@@ -193,23 +198,56 @@ secret_template() {
 		'{{if .data}}{{if .data.join}}join={{.data.join}}{{end}}{{end}}'
 }
 
+# DPU_GATE_JSONPATH reads the DPU's UID together with the two values that say
+# whether the agent has reached this step. The real agent joins in Configure
+# Kubelet, inside DPU Cluster Config, so the Node must not exist before then:
+# the controller would see the phase as already done and every phase delay
+# up to it would gate nothing. The mock pushes KubeletConfigured=True when that
+# step ends. The phase is required as well because the agent resets its
+# conditions only in memory at the start of a run, so a True left by an earlier
+# run can stay on the DPU until the new run's first push, which can come after
+# a long OS Installing delay.
+readonly DPU_GATE_JSONPATH='jsonpath={.metadata.uid}|{.status.phase}|{.status.agentStatus.conditions[?(@.type=="KubeletConfigured")].status}'
+readonly DPU_GATE_OPEN="DPU Cluster Config|True"
+
 # The DPU is read first and separately: without it there is nothing to check
 # provenance against, so there is no reason to fetch a payload at all. Neither
 # object exists until DPF has finished driving this guest's Redfish BMC.
+#
+# Only a failed read counts as an attempt. Waiting for the agent to reach
+# Configure Kubelet is DPF working normally and can take as long as the fleet's
+# phase delays, so it neither spends the budget nor logs on every poll.
 dpu_uid=""
 secret_response=""
+gate=""
+last_gate=""
 attempt=1
 kubectl_err="$(mktemp)"
 trap 'rm -f "${kubectl_err}"' EXIT
 while [ "${attempt}" -le "${JOIN_ATTEMPTS}" ]; do
 	: > "${kubectl_err}"
-	if dpu_uid="$(kube get dpu "${dpu_name}" \
-		--output 'jsonpath={.metadata.uid}' 2> "${kubectl_err}")" \
-		&& printf '%s' "${dpu_uid}" | grep -Eq '^[0-9a-fA-F-]{8,64}$' \
-		&& secret_response="$(kube get secret "${join_secret}" \
+	if dpu_state="$(kube get dpu "${dpu_name}" \
+		--output "${DPU_GATE_JSONPATH}" 2> "${kubectl_err}")" \
+		&& dpu_uid="${dpu_state%%|*}" \
+		&& printf '%s' "${dpu_uid}" | grep -Eq '^[0-9a-fA-F-]{8,64}$'; then
+		gate="${dpu_state#*|}"
+		if [ "${gate}" != "${DPU_GATE_OPEN}" ]; then
+			if [ "${gate}" != "${last_gate}" ]; then
+				# The phase is a controller-written enum; anything else is
+				# printed as unknown.
+				phase="${gate%|*}"
+				printf '%s' "${phase}" | grep -Eq '^[A-Za-z ]{0,32}$' || phase="unknown"
+				log "waiting for DPU ${dpu_name} to finish Configure Kubelet (phase ${phase:-unset})"
+				last_gate="${gate}"
+			fi
+			sleep "${JOIN_INTERVAL}"
+			continue
+		fi
+		if secret_response="$(kube get secret "${join_secret}" \
 			--output "$(secret_template "${dpu_uid}")" 2> "${kubectl_err}")" \
-		&& [ -n "${secret_response}" ]; then
-		break
+			&& [ -n "${secret_response}" ]; then
+			break
+		fi
 	fi
 	dpu_uid=""
 	secret_response=""

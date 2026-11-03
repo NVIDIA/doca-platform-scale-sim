@@ -191,6 +191,10 @@ spec:
         - name: UpdateService.SimpleUpdate
           minSeconds: 20
           maxSeconds: 30
+    phaseDelays:
+      - phase: OS Installing
+        minSeconds: 600
+        maxSeconds: 900
 ```
 
 A `DPUSet` whose `dpuDeviceSelector` matches
@@ -208,7 +212,7 @@ shows a complete set of DPF objects to pair with a fleet.
 | `dpuNodeTemplate`        | Labels and reboot method for each `DPUNode`.                                    |
 | `dpuDeviceTemplate`      | Labels and number of PFs for each `DPUDevice`.                                  |
 | `bootstrap`              | The `DPUCluster` the guests join.                                               |
-| `dpuAgent`               | DPU type, reboot methods, BMC firmware and response delays. Immutable.          |
+| `dpuAgent`               | DPU type, reboot methods, BMC firmware, response and phase delays. Immutable.   |
 
 The full reference is in [`api/v1alpha1`](api/v1alpha1/simfleet_types.go).
 
