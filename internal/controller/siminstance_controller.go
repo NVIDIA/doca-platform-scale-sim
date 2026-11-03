@@ -455,6 +455,16 @@ func (r *SimInstanceReconciler) detectDrift(
 		if err != nil {
 			return "", err
 		}
+		if !found && labelScopedCacheKind(child.obj) {
+			// The cache holds a Pod only while it carries the fleet-name
+			// label, so a miss may be a label removed from the same Pod.
+			// Converge repairs identity labels; only the API server can say
+			// the Pod is really gone or replaced.
+			found, err = r.getLiveChild(ctx, key, child.obj, child.kind)
+			if err != nil {
+				return "", err
+			}
+		}
 		if !found || string(child.obj.GetUID()) != child.uid {
 			return child.kind + "Replaced", nil
 		}

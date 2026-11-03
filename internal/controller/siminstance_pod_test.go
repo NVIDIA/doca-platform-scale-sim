@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -426,6 +427,53 @@ var _ = Describe("SimInstance drift of a pod fleet (fake client)", func() {
 
 		Expect(th.current().Status.Phase).NotTo(Equal(scalev1alpha1.SimInstanceFailed))
 		Expect(th.current().Status.FailureReason).To(BeEmpty())
+	})
+
+	// The manager's cache holds a Pod only while it carries the fleet-name
+	// label. These cases model a Pod the cache cannot see: the cached client
+	// reports it NotFound while the API reader still has it.
+	Describe("a Pod missing from the label-scoped cache", func() {
+		cacheMissDrift := func(mutate func(*readyChildren)) (string, error) {
+			fleet := podInstanceFleet()
+			children := newReadyPodChildren(fleet)
+			mutate(children)
+			th := newReadyPodInstanceHarness(fleet, children)
+			th.reconciler.Client = interceptor.NewClient(th.client.(client.WithWatch), interceptor.Funcs{
+				Get: func(
+					ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+				) error {
+					if _, isPod := obj.(*corev1.Pod); isPod {
+						return apierrors.NewNotFound(corev1.Resource("pods"), key.Name)
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			return th.reconciler.detectDrift(context.Background(), fleet, th.current())
+		}
+
+		It("is not drift when the live Pod has the recorded UID but lost the fleet-name label", func() {
+			reason, err := cacheMissDrift(func(c *readyChildren) { delete(c.pod.Labels, naming.LabelFleetName) })
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(reason).To(BeEmpty())
+		})
+
+		It("stays PodReplaced when the live Pod has another UID", func() {
+			reason, err := cacheMissDrift(func(c *readyChildren) {
+				delete(c.pod.Labels, naming.LabelFleetName)
+				c.pod.UID = types.UID("new-pod-uid")
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(reason).To(Equal("PodReplaced"))
+		})
+
+		It("stays PodReplaced when the Pod is gone from the API server", func() {
+			reason, err := cacheMissDrift(func(c *readyChildren) { c.pod = nil })
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(reason).To(Equal("PodReplaced"))
+		})
 	})
 })
 
