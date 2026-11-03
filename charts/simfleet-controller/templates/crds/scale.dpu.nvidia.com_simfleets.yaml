@@ -28,8 +28,8 @@ spec:
     - jsonPath: .status.failedInstances
       name: Failed
       type: integer
-    - jsonPath: .status.conditions[?(@.type=='InventoryReady')].status
-      name: Ready
+    - jsonPath: .status.conditions[?(@.type=='InventoryReconciled')].status
+      name: Reconciled
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -633,6 +633,11 @@ spec:
               failedInstances:
                 description: FailedInstances counts SimInstances awaiting replacement.
                 type: integer
+              guestReadyInstances:
+                description: |-
+                  GuestReadyInstances counts SimInstances whose guest is ready
+                  (GuestReady), excluding deleting instances.
+                type: integer
               observedGeneration:
                 format: int64
                 type: integer
@@ -640,11 +645,6 @@ spec:
                 description: |-
                   ProvisionedInstances counts SimInstances whose DPU has kubelet
                   configured (DPUProvisioned), excluding deleting instances.
-                type: integer
-              vmReadyInstances:
-                description: |-
-                  VMReadyInstances counts SimInstances whose VirtualMachine is ready
-                  (VMReady), excluding deleting instances.
                 type: integer
             type: object
         required:

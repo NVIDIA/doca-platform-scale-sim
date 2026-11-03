@@ -421,7 +421,7 @@ func deviceSelectable(fleet *scalev1alpha1.SimFleet, device *provisioningv1.DPUD
 
 func observeInstanceVM(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.SimInstance, children instanceChildren) {
 	if fleet.Spec.VirtualMachineTemplate == nil {
-		setInstanceCondition(instance, scalev1alpha1.SimInstanceVMReady, true,
+		setInstanceCondition(instance, scalev1alpha1.SimInstanceGuestReady, true,
 			"NotRequired", "No guest boots from this instance")
 		return
 	}
@@ -431,11 +431,11 @@ func observeInstanceVM(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.Si
 		ready = status == corev1.ConditionTrue
 	}
 	if !ready {
-		setInstanceCondition(instance, scalev1alpha1.SimInstanceVMReady, false,
+		setInstanceCondition(instance, scalev1alpha1.SimInstanceGuestReady, false,
 			"WaitingForVM", "VirtualMachine is not ready")
 		return
 	}
-	setInstanceCondition(instance, scalev1alpha1.SimInstanceVMReady, true, "Ready", "VirtualMachine is ready")
+	setInstanceCondition(instance, scalev1alpha1.SimInstanceGuestReady, true, "Ready", "VirtualMachine is ready")
 }
 
 // observeInstanceDPU finds the DPU DPF created for this instance's device.

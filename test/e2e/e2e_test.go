@@ -235,7 +235,7 @@ var _ = Describe("SimFleet", Ordered, func() {
 		Expect(objectJSONPath("dpunode", nodeName, fleetNamespace, "{.spec.nodeRebootMethod.external}")).NotTo(BeEmpty())
 		Expect(objectJSONPath("dpunode", nodeName, fleetNamespace, "{.metadata.ownerReferences[0].kind}")).To(Equal("SimFleet"))
 
-		By("waiting for InventoryReady status")
+		By("waiting for InventoryReconciled status")
 		Eventually(func(g Gomega) {
 			admitted, err := objectJSONPathErr("simfleet", fleetName, fleetNamespace, "{.status.admittedReplicas}")
 			g.Expect(err).NotTo(HaveOccurred())
@@ -247,7 +247,7 @@ var _ = Describe("SimFleet", Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(nodeCount).To(Equal("2"))
 			ready, err := objectJSONPathErr("simfleet", fleetName, fleetNamespace,
-				`{.status.conditions[?(@.type=="InventoryReady")].status}`)
+				`{.status.conditions[?(@.type=="InventoryReconciled")].status}`)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(ready).To(Equal("True"))
 		}).Should(Succeed())
@@ -282,7 +282,7 @@ var _ = Describe("SimFleet", Ordered, func() {
 			}
 		}, guestAgentTimeout(), 5*time.Second).Should(Succeed())
 
-		By("waiting for DPUsObserved")
+		By("waiting for DPUsReconciled")
 		Eventually(func(g Gomega) {
 			// Every instance names its DPU once DPF has created it; kubelet
 			// on it, which provisionedInstances counts, comes much later.
@@ -292,7 +292,7 @@ var _ = Describe("SimFleet", Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(strings.Fields(dpuNames)).To(HaveLen(replicas))
 			ready, err := objectJSONPathErr("simfleet", fleetName, fleetNamespace,
-				`{.status.conditions[?(@.type=="DPUsObserved")].status}`)
+				`{.status.conditions[?(@.type=="DPUsReconciled")].status}`)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(ready).To(Equal("True"))
 		}, guestAgentTimeout(), 5*time.Second).Should(Succeed())
@@ -358,13 +358,13 @@ var _ = Describe("SimFleet", Ordered, func() {
 		By("waiting for VirtualMachines to become Ready")
 		Eventually(func(g Gomega) {
 			readyCount, err := objectJSONPathErr(
-				"simfleet", fleetName, fleetNamespace, "{.status.vmReadyInstances}",
+				"simfleet", fleetName, fleetNamespace, "{.status.guestReadyInstances}",
 			)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(readyCount).To(Equal("2"))
 			readyCondition, err := objectJSONPathErr(
 				"simfleet", fleetName, fleetNamespace,
-				`{.status.conditions[?(@.type=="VirtualMachinesReady")].status}`,
+				`{.status.conditions[?(@.type=="GuestsReady")].status}`,
 			)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(readyCondition).To(Equal("True"))
@@ -563,7 +563,7 @@ var _ = Describe("SimFleet", Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(admitted).To(Equal(strconv.Itoa(scaledReplicas)))
 			ready, err := objectJSONPathErr("simfleet", fleetName, fleetNamespace,
-				`{.status.conditions[?(@.type=="InventoryReady")].status}`)
+				`{.status.conditions[?(@.type=="InventoryReconciled")].status}`)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(ready).To(Equal("True"))
 		}, instanceTeardownTimeout, 5*time.Second).Should(Succeed())

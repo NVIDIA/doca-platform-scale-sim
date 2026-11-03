@@ -610,7 +610,7 @@ var _ = Describe("SimInstance reconcile (fake client)", func() {
 			Expect(device.Labels).To(HaveKeyWithValue(key, want), "DPUDevice selection label %s", key)
 		}
 		requireCondition(h.current(), scalev1alpha1.SimInstanceSelectable, metav1.ConditionTrue, "")
-		requireCondition(h.current(), scalev1alpha1.SimInstanceVMReady, metav1.ConditionTrue, "")
+		requireCondition(h.current(), scalev1alpha1.SimInstanceGuestReady, metav1.ConditionTrue, "")
 	})
 
 	It("a DPU with kubelet configured is provisioned", func() {

@@ -40,9 +40,11 @@ func assertDefaultJSON(props map[string]apiextensionsv1.JSONSchemaProps, field, 
 
 var _ = Describe("SimFleet API types", func() {
 	It("names the inventory conditions", func() {
-		Expect(scalev1alpha1.ConditionInventoryReady).To(Equal("InventoryReady"))
-		Expect(scalev1alpha1.ConditionDPUsObserved).To(Equal("DPUsObserved"))
-		Expect(scalev1alpha1.ConditionBootstrapReady).To(Equal("BootstrapReady"))
+		Expect(scalev1alpha1.ConditionInventoryReconciled).To(Equal("InventoryReconciled"))
+		Expect(scalev1alpha1.ConditionDPUsReconciled).To(Equal("DPUsReconciled"))
+		Expect(scalev1alpha1.ConditionGuestsReady).To(Equal("GuestsReady"))
+		Expect(scalev1alpha1.ConditionBootstrapReconciled).To(Equal("BootstrapReconciled"))
+		Expect(scalev1alpha1.SimInstanceGuestReady).To(Equal("GuestReady"))
 	})
 
 	Describe("DeepCopy", func() {
@@ -83,13 +85,13 @@ var _ = Describe("SimFleet API types", func() {
 				ObservedGeneration:   3,
 				AdmittedReplicas:     20,
 				CreatedInstances:     19,
-				VMReadyInstances:     18,
+				GuestReadyInstances:  18,
 				ProvisionedInstances: 17,
 				FailedInstances:      1,
 				DPUNodes:             2,
 				Conditions: []metav1.Condition{
-					{Type: scalev1alpha1.ConditionInventoryReady, Status: metav1.ConditionTrue},
-					{Type: scalev1alpha1.ConditionDPUsObserved, Status: metav1.ConditionFalse},
+					{Type: scalev1alpha1.ConditionInventoryReconciled, Status: metav1.ConditionTrue},
+					{Type: scalev1alpha1.ConditionDPUsReconciled, Status: metav1.ConditionFalse},
 				},
 			}
 
@@ -97,7 +99,7 @@ var _ = Describe("SimFleet API types", func() {
 			Expect(copied.ObservedGeneration).To(BeEquivalentTo(3))
 			Expect(copied.AdmittedReplicas).To(BeEquivalentTo(20))
 			Expect(copied.CreatedInstances).To(BeEquivalentTo(19))
-			Expect(copied.VMReadyInstances).To(BeEquivalentTo(18))
+			Expect(copied.GuestReadyInstances).To(BeEquivalentTo(18))
 			Expect(copied.ProvisionedInstances).To(BeEquivalentTo(17))
 			Expect(copied.FailedInstances).To(BeEquivalentTo(1))
 			Expect(copied.DPUNodes).To(BeEquivalentTo(2))
@@ -176,7 +178,7 @@ var _ = Describe("SimFleet API types", func() {
 		slices.Sort(got)
 		Expect(got).To(Equal([]string{
 			"admittedReplicas", "conditions", "createdInstances", "dpuNodes", "failedInstances",
-			"observedGeneration", "provisionedInstances", "vmReadyInstances",
+			"guestReadyInstances", "observedGeneration", "provisionedInstances",
 		}))
 	})
 
@@ -188,7 +190,7 @@ var _ = Describe("SimFleet API types", func() {
 			{Name: "Admitted", Type: "integer", JSONPath: ".status.admittedReplicas"},
 			{Name: "Provisioned", Type: "integer", JSONPath: ".status.provisionedInstances"},
 			{Name: "Failed", Type: "integer", JSONPath: ".status.failedInstances"},
-			{Name: "Ready", Type: "string", JSONPath: ".status.conditions[?(@.type=='InventoryReady')].status"},
+			{Name: "Reconciled", Type: "string", JSONPath: ".status.conditions[?(@.type=='InventoryReconciled')].status"},
 			{Name: "Age", Type: "date", JSONPath: ".metadata.creationTimestamp"},
 		}))
 	})

@@ -320,7 +320,7 @@ func requiredInstanceConditions(fleet *scalev1alpha1.SimFleet) []string {
 		scalev1alpha1.SimInstanceDPUProvisioned,
 	}
 	if fleet.Spec.VirtualMachineTemplate != nil {
-		required = append(required, scalev1alpha1.SimInstanceVMReady, scalev1alpha1.SimInstanceSelectable)
+		required = append(required, scalev1alpha1.SimInstanceGuestReady, scalev1alpha1.SimInstanceSelectable)
 	}
 	return required
 }

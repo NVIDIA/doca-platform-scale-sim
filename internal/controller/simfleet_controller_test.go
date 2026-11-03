@@ -166,7 +166,7 @@ var _ = Describe("SimFleet reconcile (fake client)", func() {
 	})
 
 	Describe("errors", func() {
-		It("reports a reconcile error on InventoryReady", func() {
+		It("reports a reconcile error on InventoryReconciled", func() {
 			fleet := rolloutFleet(2, 2, 2)
 			fleet.Finalizers = []string{scalev1alpha1.SimFleetFinalizer}
 			foreign := dpf.DesiredHostNode(fleet, 0, fleet.Spec.Replicas)
@@ -191,7 +191,7 @@ var _ = Describe("SimFleet reconcile (fake client)", func() {
 
 			reconcile()
 
-			expectCondition(h.fleet().Status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionFalse, "ReconcileError")
+			expectCondition(h.fleet().Status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "ReconcileError")
 			Expect(h.calls).To(Equal([]string{call(callStatus, "admitted=2")}), "want only the status patch")
 
 			h.calls = nil
@@ -205,7 +205,7 @@ var readyInstanceConditions = []string{
 	scalev1alpha1.SimInstanceCredentialsReady,
 	scalev1alpha1.SimInstanceDeviceCreated,
 	scalev1alpha1.SimInstanceChildrenCreated,
-	scalev1alpha1.SimInstanceVMReady,
+	scalev1alpha1.SimInstanceGuestReady,
 	scalev1alpha1.SimInstanceSelectable,
 	scalev1alpha1.SimInstanceDPUProvisioned,
 }
@@ -254,14 +254,14 @@ var _ = Describe("SimFleet status", func() {
 
 			Expect(status.AdmittedReplicas).To(Equal(4), "admittedReplicas")
 			Expect(status.CreatedInstances).To(Equal(2), "createdInstances")
-			Expect(status.VMReadyInstances).To(Equal(1), "vmReadyInstances")
+			Expect(status.GuestReadyInstances).To(Equal(1), "guestReadyInstances")
 			Expect(status.ProvisionedInstances).To(Equal(1), "provisionedInstances")
 			Expect(status.FailedInstances).To(Equal(1), "failedInstances")
 			Expect(status.DPUNodes).To(Equal(2), "dpuNodes")
-			expectCondition(status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionFalse, "Progressing")
-			expectCondition(status, scalev1alpha1.ConditionDPUsObserved, metav1.ConditionFalse, "WaitingForDPUs")
-			expectCondition(status, scalev1alpha1.ConditionBootstrapReady, metav1.ConditionFalse, "Progressing")
-			expectCondition(status, scalev1alpha1.ConditionVirtualMachinesReady, metav1.ConditionFalse, "Progressing")
+			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "Progressing")
+			expectCondition(status, scalev1alpha1.ConditionDPUsReconciled, metav1.ConditionFalse, "WaitingForDPUs")
+			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionFalse, "Progressing")
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionFalse, "Progressing")
 		})
 
 		It("reports a ready fleet", func() {
@@ -273,10 +273,10 @@ var _ = Describe("SimFleet status", func() {
 
 			status := aggregateStatus(fleet, instances, 1)
 
-			expectCondition(status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionTrue, "Ready")
-			expectCondition(status, scalev1alpha1.ConditionDPUsObserved, metav1.ConditionTrue, "Ready")
-			expectCondition(status, scalev1alpha1.ConditionBootstrapReady, metav1.ConditionTrue, "Ready")
-			expectCondition(status, scalev1alpha1.ConditionVirtualMachinesReady, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionDPUsReconciled, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionTrue, "Ready")
 		})
 
 		It("keeps inventory progressing until every replica is admitted", func() {
@@ -285,7 +285,7 @@ var _ = Describe("SimFleet status", func() {
 
 			status := aggregateStatus(fleet, instances, 10)
 
-			expectCondition(status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionFalse, "Progressing")
+			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "Progressing")
 		})
 
 		It("keeps inventory progressing until every admitted instance exists", func() {
@@ -296,7 +296,7 @@ var _ = Describe("SimFleet status", func() {
 
 			status := aggregateStatus(fleet, instances, 1)
 
-			expectCondition(status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionFalse, "Progressing")
+			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "Progressing")
 		})
 
 		DescribeTable("keeps inventory not ready with a failed or deleting instance",
@@ -311,9 +311,9 @@ var _ = Describe("SimFleet status", func() {
 
 				status := aggregateStatus(fleet, instances, 1)
 
-				expectCondition(status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionFalse, "Progressing")
+				expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "Progressing")
 				Expect(status.CreatedInstances).To(Equal(1), "createdInstances")
-				Expect(status.VMReadyInstances).To(Equal(wantVMReady), "vmReadyInstances")
+				Expect(status.GuestReadyInstances).To(Equal(wantVMReady), "guestReadyInstances")
 				Expect(status.ProvisionedInstances).To(Equal(wantProvisioned), "provisionedInstances")
 			},
 			// A Failed instance keeps its VM and DPU until it is deleted, so only
@@ -328,9 +328,9 @@ var _ = Describe("SimFleet status", func() {
 		It("reports a fleet of zero replicas as ready", func() {
 			status := aggregateStatus(rolloutFleet(0, 1, 0), nil, 0)
 
-			expectCondition(status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionTrue, "Ready")
-			expectCondition(status, scalev1alpha1.ConditionDPUsObserved, metav1.ConditionTrue, "Ready")
-			expectCondition(status, scalev1alpha1.ConditionVirtualMachinesReady, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionDPUsReconciled, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionTrue, "Ready")
 		})
 
 		It("reports duplicate DPUs", func() {
@@ -348,7 +348,7 @@ var _ = Describe("SimFleet status", func() {
 
 			status := aggregateStatus(fleet, instances, 1)
 
-			expectCondition(status, scalev1alpha1.ConditionDPUsObserved, metav1.ConditionFalse, "MultipleDPUs")
+			expectCondition(status, scalev1alpha1.ConditionDPUsReconciled, metav1.ConditionFalse, "MultipleDPUs")
 		})
 
 		It("waits for virtual machines to be ready", func() {
@@ -362,9 +362,9 @@ var _ = Describe("SimFleet status", func() {
 			status := aggregateStatus(fleet, instances, 1)
 
 			Expect(status.CreatedInstances).To(Equal(2), "createdInstances")
-			Expect(status.VMReadyInstances).To(Equal(0), "vmReadyInstances")
-			expectCondition(status, scalev1alpha1.ConditionVirtualMachinesReady, metav1.ConditionFalse, "WaitingForVMs")
-			expectCondition(status, scalev1alpha1.ConditionBootstrapReady, metav1.ConditionTrue, "Ready")
+			Expect(status.GuestReadyInstances).To(Equal(0), "guestReadyInstances")
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionFalse, "WaitingForGuests")
+			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionTrue, "Ready")
 		})
 
 		It("is ready without a virtual machine template", func() {
@@ -379,9 +379,9 @@ var _ = Describe("SimFleet status", func() {
 			status := aggregateStatus(fleet, instances, 1)
 
 			Expect(status.CreatedInstances).To(Equal(2), "createdInstances without a template")
-			expectCondition(status, scalev1alpha1.ConditionVirtualMachinesReady, metav1.ConditionTrue, "Ready")
-			expectCondition(status, scalev1alpha1.ConditionBootstrapReady, metav1.ConditionTrue, "Ready")
-			expectCondition(status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionTrue, "Ready")
+			expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionTrue, "Ready")
 		})
 
 		It("reports an invalid virtual machine template", func() {
@@ -390,8 +390,8 @@ var _ = Describe("SimFleet status", func() {
 
 			status := aggregateStatus(fleet, nil, 0)
 
-			expectCondition(status, scalev1alpha1.ConditionBootstrapReady, metav1.ConditionFalse, "UnsupportedStorage")
-			expectCondition(status, scalev1alpha1.ConditionVirtualMachinesReady, metav1.ConditionFalse, "UnsupportedStorage")
+			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionFalse, "UnsupportedStorage")
+			expectCondition(status, scalev1alpha1.ConditionGuestsReady, metav1.ConditionFalse, "UnsupportedStorage")
 		})
 
 		It("reports a blocked credential", func() {
@@ -402,11 +402,11 @@ var _ = Describe("SimFleet status", func() {
 
 			status := aggregateStatus(fleet, instanceMap(blocked), 0)
 
-			expectCondition(status, scalev1alpha1.ConditionBootstrapReady, metav1.ConditionFalse, "OwnershipConflict")
+			expectCondition(status, scalev1alpha1.ConditionBootstrapReconciled, metav1.ConditionFalse, "OwnershipConflict")
 		})
 	})
 
-	Describe("bootstrapReadyCondition", func() {
+	Describe("bootstrapReconciledCondition", func() {
 		withTemplate := &scalev1alpha1.SimFleet{
 			Spec: scalev1alpha1.SimFleetSpec{
 				VirtualMachineTemplate: &scalev1alpha1.VirtualMachineTemplate{Image: "example.com/node@sha256:test"},
@@ -414,10 +414,10 @@ var _ = Describe("SimFleet status", func() {
 		}
 		blocked := &bootstrapConditionError{reason: "OwnershipConflict", message: "blocked"}
 
-		DescribeTable("reports BootstrapReady",
+		DescribeTable("reports BootstrapReconciled",
 			func(testCase bootstrapReadyCase) {
-				condition := bootstrapReadyCondition(testCase.fleet, testCase.bootstrap, testCase.desiredVMs)
-				Expect(condition.Type).To(Equal(scalev1alpha1.ConditionBootstrapReady))
+				condition := bootstrapReconciledCondition(testCase.fleet, testCase.bootstrap, testCase.desiredVMs)
+				Expect(condition.Type).To(Equal(scalev1alpha1.ConditionBootstrapReconciled))
 				Expect(condition.Status).To(Equal(testCase.status))
 				Expect(condition.Reason).To(Equal(testCase.reason))
 				Expect(condition.Message).NotTo(BeEmpty())

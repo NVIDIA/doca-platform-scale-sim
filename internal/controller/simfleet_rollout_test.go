@@ -77,8 +77,8 @@ var _ = Describe("SimFleet rollout", func() {
 
 		Expect(h.instances()).To(HaveKey(0), "the conflict on ordinal 1 stopped ordinal 0 from being created")
 		status := h.fleet().Status
-		expectCondition(status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionFalse, "OwnershipConflict")
-		condition := meta.FindStatusCondition(status.Conditions, scalev1alpha1.ConditionInventoryReady)
+		expectCondition(status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "OwnershipConflict")
+		condition := meta.FindStatusCondition(status.Conditions, scalev1alpha1.ConditionInventoryReconciled)
 		Expect(condition.Message).To(ContainSubstring(foreign.Name))
 		current := &scalev1alpha1.SimInstance{}
 		Expect(h.client.Get(context.Background(), client.ObjectKeyFromObject(foreign), current)).To(Succeed())
@@ -104,7 +104,7 @@ var _ = Describe("SimFleet rollout", func() {
 		_, err := h.reconciler.Reconcile(logf.IntoContext(context.Background(), logger), ctrl.Request{NamespacedName: h.key})
 		Expect(err).NotTo(HaveOccurred())
 
-		expectCondition(h.fleet().Status, scalev1alpha1.ConditionInventoryReady, metav1.ConditionFalse, "Progressing")
+		expectCondition(h.fleet().Status, scalev1alpha1.ConditionInventoryReconciled, metav1.ConditionFalse, "Progressing")
 		Expect(logs).To(ContainElement(SatisfyAll(
 			ContainSubstring(`"msg"="Skipped creating SimInstance that still exists"`),
 			ContainSubstring(`"simInstance"="`+earlier.Name+`"`),
