@@ -468,6 +468,13 @@ func (r *SimInstanceReconciler) detectDrift(
 		if !found || string(child.obj.GetUID()) != child.uid {
 			return child.kind + "Replaced", nil
 		}
+		// A Pod that ran to an end keeps its UID and never runs again, so
+		// the instance would wait on it forever. Replace it as a replaced
+		// Pod is replaced.
+		if pod, ok := child.obj.(*corev1.Pod); ok &&
+			(pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded) {
+			return "PodTerminated", nil
+		}
 	}
 	return "", nil
 }
@@ -972,7 +979,13 @@ func stripFinalizersAndForceDelete(
 		"name", obj.GetName(),
 		"elapsed", elapsed,
 	)
-	if err := c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+	// A Pod stuck Terminating on a lost node has no finalizer to strip; only
+	// a zero grace period lets the API server remove it.
+	var deleteOpts []client.DeleteOption
+	if _, isPod := obj.(*corev1.Pod); isPod {
+		deleteOpts = append(deleteOpts, client.GracePeriodSeconds(0))
+	}
+	if err := c.Delete(ctx, obj, deleteOpts...); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete %s %q after stripping finalizers: %w", kind, obj.GetName(), err)
 	}
 	return nil

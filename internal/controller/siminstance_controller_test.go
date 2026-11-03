@@ -1408,6 +1408,36 @@ var _ = Describe("stripFinalizersAndForceDelete", func() {
 		Expect(recorder.Events).NotTo(Receive(), "unexpected second Event")
 	})
 
+	It("deletes a Pod with a zero grace period and a Secret without one", func(ctx SpecContext) {
+		deleted := map[string]*int64{}
+		c := interceptor.NewClient(
+			fake.NewClientBuilder().WithScheme(instanceTestScheme()).WithObjects(
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "fleet-ns"}},
+				finalizedSecret(),
+			).Build().(client.WithWatch),
+			interceptor.Funcs{Delete: func(
+				ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption,
+			) error {
+				o := &client.DeleteOptions{}
+				o.ApplyOptions(opts)
+				deleted[fmt.Sprintf("%T", obj)] = o.GracePeriodSeconds
+				return c.Delete(ctx, obj, opts...)
+			}},
+		)
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "fleet-ns"}}
+
+		Expect(stripFinalizersAndForceDelete(ctx, c, nil, instance, pod, "Pod", 0, lifecycleForceTimeout)).To(Succeed())
+		Expect(stripFinalizersAndForceDelete(
+			ctx, c, nil, instance, finalizedSecret(), "Secret", 0, lifecycleForceTimeout,
+		)).To(Succeed())
+
+		Expect(deleted).To(HaveKey("*v1.Pod"))
+		Expect(deleted["*v1.Pod"]).NotTo(BeNil(), "Pod grace period")
+		Expect(*deleted["*v1.Pod"]).To(BeZero(), "Pod grace period seconds")
+		Expect(deleted).To(HaveKey("*v1.Secret"))
+		Expect(deleted["*v1.Secret"]).To(BeNil(), "Secret grace period")
+	})
+
 	It("tolerates an already-gone object", func(ctx SpecContext) {
 		c := fake.NewClientBuilder().WithScheme(instanceTestScheme()).Build()
 		recorder := events.NewFakeRecorder(10)

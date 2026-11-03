@@ -417,6 +417,26 @@ var _ = Describe("SimInstance drift of a pod fleet (fake client)", func() {
 		},
 		Entry("a Pod with another UID", func(c *readyChildren) { c.pod.UID = types.UID("new-pod-uid") }, "PodReplaced"),
 		Entry("a missing Pod", func(c *readyChildren) { c.pod = nil }, "PodReplaced"),
+		Entry("a Failed Pod with the recorded UID",
+			func(c *readyChildren) { c.pod.Status.Phase = corev1.PodFailed }, "PodTerminated"),
+		Entry("a Succeeded Pod with the recorded UID",
+			func(c *readyChildren) { c.pod.Status.Phase = corev1.PodSucceeded }, "PodTerminated"),
+	)
+
+	DescribeTable("a Pod that has not ended is not drift",
+		func(phase corev1.PodPhase) {
+			fleet := podInstanceFleet()
+			children := newReadyPodChildren(fleet)
+			children.pod.Status.Phase = phase
+			th := newReadyPodInstanceHarness(fleet, children)
+
+			reason, err := th.reconciler.detectDrift(context.Background(), fleet, th.current())
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(reason).To(BeEmpty())
+		},
+		Entry("Pending", corev1.PodPending),
+		Entry("Running", corev1.PodRunning),
 	)
 
 	It("recorded UIDs that still match are not drift", func() {
