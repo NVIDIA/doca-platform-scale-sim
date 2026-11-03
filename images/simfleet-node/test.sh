@@ -236,6 +236,8 @@ test_recipe_contract() {
 
 	assert_contains 'ExecStart=/opt/dpf/wait-kubelet-join.sh' \
 		"${ROOT}/guest/wait-kubelet-join.service"
+	assert_contains 'ConditionPathExists=/etc/dpf-sim/identity.env' \
+		"${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'Type=oneshot' "${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'Restart=on-failure' "${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'StartLimitIntervalSec=0' "${ROOT}/guest/wait-kubelet-join.service"
@@ -250,6 +252,8 @@ test_recipe_contract() {
 	assert_not_matches '^(After|Before|Requires|Requisite|Wants|BindsTo)=.*mock-dpuagent' \
 		"${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'ExecStartPre=/usr/bin/test -s /etc/mock-dpuagent/config.yaml' \
+		"${ROOT}/guest/mock-dpuagent.service"
+	assert_contains 'ConditionPathExists=/etc/mock-dpuagent/config.yaml' \
 		"${ROOT}/guest/mock-dpuagent.service"
 	assert_contains 'ExecStart=/opt/dpf/mock-dpuagent --config=/etc/mock-dpuagent/config.yaml' \
 		"${ROOT}/guest/mock-dpuagent.service"
