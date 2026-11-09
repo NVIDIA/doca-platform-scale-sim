@@ -427,6 +427,7 @@ func redactGuestCredentials(text string) string {
 			"client-certificate-data",
 			"certificate-authority-data",
 			"token:",
+			"--token",
 		} {
 			if strings.Contains(line, marker) {
 				lines[i] = "[redacted: guest credential material]"

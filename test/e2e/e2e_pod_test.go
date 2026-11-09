@@ -264,8 +264,9 @@ func dumpPodRuntimeDiagnostics() {
 		{"get", "events", "-n", fleetNamespace, "--sort-by=.lastTimestamp"},
 		{"get", "pods", "-n", fleetNamespace, "-l", fleetLabel, "-o", "wide"},
 		{"describe", "pods", "-n", fleetNamespace, "-l", fleetLabel},
-		// The DPU Pod's console is systemd's, and it is the only place the
-		// inner kubelet, containerd and mock-dpuagent report to.
+		// The DPU Pod's stdout stays empty: systemd is PID 1, so the inner
+		// kubelet and the join script report to the journal. That journal is
+		// read below with kubectl exec.
 		{"logs", "-n", fleetNamespace, "-l", fleetLabel, "--tail=-1"},
 		{"get", "siminstances", "-n", fleetNamespace, "-l", fleetLabel, "-o", "yaml"},
 		{"get", "dpu", fleetDPUName(0), "-n", fleetNamespace, "-o", "yaml"},
@@ -282,6 +283,9 @@ func dumpPodRuntimeDiagnostics() {
 			_, _ = fmt.Fprintf(GinkgoWriter, "Failed to run kubectl %s: %s\n", strings.Join(args, " "), err)
 		}
 	}
+
+	// journalctl is the guest console. kubectl logs cannot see it.
+	dumpGuestJournal("kubelet", "wait-kubelet-join")
 
 	By("Fetching the DPU cluster's Pods")
 	err := withTenantKubeconfig(func(path string) error {
@@ -301,4 +305,21 @@ func dumpPodRuntimeDiagnostics() {
 	dumpProvisioningControllerDiagnostics()
 	dumpBFBFixtureDiagnostics()
 	dumpTenantNodeDiagnostics()
+}
+
+// dumpGuestJournal reads the named systemd units from every DPU Pod. The
+// join script and the inner kubelet write there, not to the container's
+// stdout, so a failed join is invisible in kubectl logs.
+func dumpGuestJournal(units ...string) {
+	args := []string{"exec", "-n", fleetNamespace, "-l", fleetLabel, "--", "journalctl", "--no-pager", "-n", "400"}
+	for _, unit := range units {
+		args = append(args, "-u", unit)
+	}
+	By("Running kubectl " + strings.Join(args, " "))
+	output, err := run(exec.Command("kubectl", args...))
+	if err == nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Guest journal:\n%s", redactGuestCredentials(output))
+		return
+	}
+	_, _ = fmt.Fprintf(GinkgoWriter, "Failed to read the guest journal: %s\n", err)
 }
