@@ -140,6 +140,46 @@ validate_join_command() {
 
 JOIN_ARGS_FILE="${JOIN_ARGS_FILE:-/usr/lib/dpf-sim/kubeadm-join.args}"
 
+# ensure_kernel_config gives kubeadm a config file to parse. The guest shares
+# the host kernel. SystemVerification refuses the join when it finds neither
+# /proc/config.gz nor /boot/config-$(uname -r) and the configs module is not
+# installed, which is the Azure kernel on a GitHub runner. The options are
+# the ones that check requires; the cgroup controllers are reported separately
+# and already have to be enabled on the host.
+ensure_kernel_config() {
+	local release config proc
+	release="$(uname -r)"
+	config="${KERNEL_CONFIG_FILE:-/boot/config-${release}}"
+	proc="${KERNEL_CONFIG_PROC:-/proc/config.gz}"
+	if [ -r "${proc}" ] || [ -r "${config}" ]; then
+		return 0
+	fi
+	mkdir -p "$(dirname "${config}")"
+	cat > "${config}" <<'EOF'
+CONFIG_NAMESPACES=y
+CONFIG_NET_NS=y
+CONFIG_PID_NS=y
+CONFIG_IPC_NS=y
+CONFIG_UTS_NS=y
+CONFIG_CPUSETS=y
+CONFIG_MEMCG=y
+CONFIG_INET=y
+CONFIG_EXT4_FS=y
+CONFIG_PROC_FS=y
+CONFIG_NETFILTER_XT_TARGET_REDIRECT=y
+CONFIG_NETFILTER_XT_MATCH_COMMENT=y
+CONFIG_FAIR_GROUP_SCHED=y
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_BPF=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_CGROUP_SCHED=y
+CONFIG_OVERLAY_FS=y
+CONFIG_CFS_BANDWIDTH=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+EOF
+}
+
 # append_image_join_args adds the container image's extra kubeadm arguments.
 # The file is root-owned image content, not the join Secret, so its lines are
 # not checked against the Secret grammar. A missing file is the VM image.
@@ -314,5 +354,6 @@ fi
 # expect the tenant Node to be named after the DPU.
 log "joining the tenant cluster as ${dpu_name}"
 append_image_join_args
+ensure_kernel_config
 "${join_argv[@]}" --node-name="${dpu_name}"
 log "kubelet is configured; mock-dpuagent owns the official kubelet start"

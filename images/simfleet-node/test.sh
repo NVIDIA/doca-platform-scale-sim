@@ -1243,10 +1243,12 @@ run_join_helper() {
 	local root="$1"
 	shift
 	(
+		: > "${root}/proc-config.gz"
 		env PATH="${root}/bin:${PATH}" JOIN_CALLS="${root}/calls" \
 			IDENTITY_FILE="${root}/etc/identity.env" \
 			MGMT_KUBECONFIG="${root}/etc/mgmt.kubeconfig" \
 			KUBELET_CONF="${root}/etc/kubelet.conf" \
+			KERNEL_CONFIG_PROC="${root}/proc-config.gz" \
 			JOIN_ATTEMPTS=2 JOIN_INTERVAL=0 \
 			"FAKE_DPU_UID=${JOIN_DPU_UID}" \
 			"FAKE_SECRET_RESPONSE=${JOIN_SECRET_RESPONSE}" \
@@ -1312,6 +1314,42 @@ test_join_args_hook() (
 	test "${join_argv[5]}" = '--v=3' \
 		&& test "${join_argv[6]}" = '--v=4' \
 		|| fail "blank lines were not skipped"
+)
+
+# test_kernel_config_for_kubeadm checks that a guest with no kernel config
+# gains /boot/config-$(uname -r) before kubeadm join, and that an existing
+# config is left alone.
+test_kernel_config_for_kubeadm() (
+	local dir="${TMP}/kernel-config"
+	rm -rf "${dir}"
+	mkdir -p "${dir}"
+	# shellcheck disable=SC1090
+	WAIT_KUBELET_JOIN_SOURCE_ONLY=1 source "${ROOT}/guest/wait-kubelet-join.sh"
+
+	KERNEL_CONFIG_PROC="${dir}/missing-proc-config.gz" \
+		KERNEL_CONFIG_FILE="${dir}/boot/config-test" \
+		ensure_kernel_config
+	[ -f "${dir}/boot/config-test" ] || fail "ensure_kernel_config did not write a kernel config"
+	grep -q '^CONFIG_NAMESPACES=y$' "${dir}/boot/config-test" \
+		|| fail "written kernel config is missing CONFIG_NAMESPACES"
+	grep -q '^CONFIG_CGROUP_BPF=y$' "${dir}/boot/config-test" \
+		|| fail "written kernel config is missing CONFIG_CGROUP_BPF"
+
+	printf '%s\n' 'CONFIG_NAMESPACES=n' > "${dir}/boot/config-test"
+	KERNEL_CONFIG_PROC="${dir}/missing-proc-config.gz" \
+		KERNEL_CONFIG_FILE="${dir}/boot/config-test" \
+		ensure_kernel_config
+	grep -q '^CONFIG_NAMESPACES=n$' "${dir}/boot/config-test" \
+		|| fail "ensure_kernel_config rewrote an existing kernel config"
+
+	printf '%s\n' 'present' > "${dir}/proc-config.gz"
+	rm -f "${dir}/boot/config-from-proc"
+	KERNEL_CONFIG_PROC="${dir}/proc-config.gz" \
+		KERNEL_CONFIG_FILE="${dir}/boot/config-from-proc" \
+		ensure_kernel_config
+	[ ! -e "${dir}/boot/config-from-proc" ] \
+		|| fail "ensure_kernel_config wrote a config when /proc/config.gz exists"
+	echo "PASS: kernel config for kubeadm"
 )
 
 test_join_helper_configures_kubelet_from_the_secret() {
@@ -2234,6 +2272,7 @@ test_cached_build_rebuilds_on_recipe_change
 test_cached_build_rebuilds_on_image_version_change
 test_cached_build_never_trusts_a_bare_tag
 test_join_args_hook
+test_kernel_config_for_kubeadm
 test_join_helper_configures_kubelet_from_the_secret
 test_join_helper_is_idempotent_once_kubelet_is_configured
 test_join_helper_waits_for_configure_kubelet
