@@ -311,15 +311,24 @@ func dumpPodRuntimeDiagnostics() {
 // join script and the inner kubelet write there, not to the container's
 // stdout, so a failed join is invisible in kubectl logs.
 func dumpGuestJournal(units ...string) {
-	args := []string{"exec", "-n", fleetNamespace, "-l", fleetLabel, "--", "journalctl", "--no-pager", "-n", "400"}
-	for _, unit := range units {
-		args = append(args, "-u", unit)
-	}
-	By("Running kubectl " + strings.Join(args, " "))
-	output, err := run(exec.Command("kubectl", args...))
-	if err == nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "Guest journal:\n%s", redactGuestCredentials(output))
+	// kubectl exec has no label selector, so resolve the Pod names first.
+	names, err := run(exec.Command("kubectl", "get", "pods", "-n", fleetNamespace, "-l", fleetLabel, "-o", "name"))
+	if err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Failed to list DPU Pods for the guest journal: %s\n", err)
 		return
 	}
-	_, _ = fmt.Fprintf(GinkgoWriter, "Failed to read the guest journal: %s\n", err)
+	journal := []string{"journalctl", "--no-pager", "-n", "400"}
+	for _, unit := range units {
+		journal = append(journal, "-u", unit)
+	}
+	for _, name := range nonEmptyLines(names) {
+		args := append([]string{"exec", "-n", fleetNamespace, name, "--"}, journal...)
+		By("Running kubectl " + strings.Join(args, " "))
+		output, err := run(exec.Command("kubectl", args...))
+		if err != nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "Failed to read the guest journal from %s: %s\n", name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "Guest journal from %s:\n%s", name, redactGuestCredentials(output))
+	}
 }
