@@ -137,6 +137,14 @@ overlay
 br_netfilter
 MODULES_EOF
 chmod 0644 /etc/modules-load.d/simfleet.conf
+
+# Ubuntu's containerd package, same as the pod image. virt-customize has no
+# running systemd, so policy-rc.d keeps the package scripts from starting the
+# service. install.sh enables the unit afterwards and removes nothing else.
+printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+chmod 0755 /usr/sbin/policy-rc.d
+apt-get install -y --no-install-recommends containerd
+rm -f /usr/sbin/policy-rc.d
 EOF
 	printf "\nchmod +x /tmp/install.sh && KUBE_APT_VERSION='%s' /tmp/install.sh\n" "${KUBE_APT_VERSION}"
 )"

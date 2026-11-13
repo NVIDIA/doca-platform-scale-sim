@@ -263,10 +263,22 @@ test_recipe_contract() {
 	assert_contains 'apt-get clean' "${ROOT}/guest/install.sh"
 	assert_contains 'rm -rf /var/lib/apt/lists' "${ROOT}/guest/install.sh"
 	assert_contains 'apt-get install -y --no-install-recommends \' "${ROOT}/guest/install.sh"
-	assert_contains $'\tcontainerd' "${ROOT}/guest/install.sh"
-	if grep -Fq 'containerd.io' "${ROOT}/guest/install.sh"; then
-		fail "guest/install.sh must use Ubuntu's containerd package only"
-	fi
+	assert_contains 'containerd must be installed before guest/install.sh' "${ROOT}/guest/install.sh"
+	assert_absent $'\tcontainerd' "${ROOT}/guest/install.sh"
+	# The same Ubuntu package, installed by each image. The VM build blocks
+	# service starts because virt-customize has no systemd.
+	assert_contains 'apt-get install -y --no-install-recommends containerd' "${ROOT}/customize-disk.sh"
+	assert_contains 'printf '"'"'#!/bin/sh\nexit 101\n'"'"' > /usr/sbin/policy-rc.d' \
+		"${ROOT}/customize-disk.sh"
+	assert_contains 'rm -f /usr/sbin/policy-rc.d' "${ROOT}/customize-disk.sh"
+	assert_absent 'policy-rc.d' "${ROOT}/guest/install.sh"
+	assert_contains 'containerd \' "${ROOT}/Dockerfile.container"
+	assert_absent 'policy-rc.d' "${ROOT}/Dockerfile.container"
+	for file in guest/install.sh customize-disk.sh Dockerfile.container; do
+		if grep -Fq 'containerd.io' "${ROOT}/${file}"; then
+			fail "${file} must use Ubuntu's containerd package only"
+		fi
+	done
 	if grep -Fq '| head' "${ROOT}/guest/install.sh"; then
 		fail "guest version checks must not risk pipefail from an early-closing pipe"
 	fi

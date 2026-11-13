@@ -24,10 +24,18 @@ KUBE_VERSION="v${KUBE_APT_VERSION%%-*}"
 # pkgs.k8s.io publishes one apt repository per minor release.
 KUBE_MINOR="${KUBE_VERSION%.*}"
 
+# containerd itself is installed by the image that calls this script.
+# customize-disk.sh installs it under virt-customize, where a package script
+# must not start a service, and Dockerfile.container installs it in its own
+# apt transaction. Both use Ubuntu's containerd package.
+if ! command -v containerd >/dev/null 2>&1; then
+	echo "containerd must be installed before guest/install.sh" >&2
+	exit 1
+fi
+
 apt-get update
 apt-get install -y --no-install-recommends \
-	apt-transport-https ca-certificates curl gpg \
-	containerd
+	apt-transport-https ca-certificates curl gpg
 
 # kubeadm requires the CRI plugin enabled and runc on the systemd cgroup
 # driver, which is not Ubuntu's packaged default. Regenerate the whole file so

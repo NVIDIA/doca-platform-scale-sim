@@ -29,12 +29,15 @@ ENV container=oci \
 # The VM cloud image already has systemd, so guest/install.sh does not install
 # it. kmod and procps are for the node-prep DaemonSet, which runs this image.
 # dbus, iproute2, iptables, conntrack, ethtool and socat are what kubelet, the
-# CNI plugins and kubeadm's preflight expect on a node.
+# CNI plugins and kubeadm's preflight expect on a node. containerd is Ubuntu's
+# package, installed here rather than in guest/install.sh: the VM disk installs
+# the same package from customize-disk.sh, where a running systemd is absent.
 RUN test -n "${KUBE_APT_VERSION}" \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus kmod procps \
       iproute2 iptables conntrack ethtool socat \
+      containerd \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
