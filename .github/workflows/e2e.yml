@@ -2,7 +2,7 @@ name: e2e
 
 # The suite builds a Kind cluster with DPF and KubeVirt and runs for up to two
 # hours, so it is opt-in on pull requests (add the e2e label) and runs on
-# every push to main.
+# every push to main. The pod runtime suite is a separate workflow.
 on:
   push:
     branches: [main]
@@ -14,12 +14,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  group: e2e-vm-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   e2e:
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    if: >-
+      (github.event_name == 'push') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e')) ||
+      (github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     # Must exceed E2E_TEST_TIMEOUT (119m) plus the cluster, DPF, KubeVirt and
     # node image setup, or the job is killed before the suite reports.

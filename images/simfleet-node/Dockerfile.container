@@ -1,0 +1,85 @@
+# Copyright 2026 NVIDIA.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The node-in-a-pod image: the same guest as the containerDisk, with systemd as
+# PID 1 in a privileged Pod. Build it through `make node-container-image-build`,
+# which supplies the build arguments and the "dpuagent" build context.
+FROM ubuntu:24.04
+
+# lib.sh's SIMFLEET_KUBE_APT_VERSION is the only Kubernetes pin; the Makefile
+# passes it in.
+ARG KUBE_APT_VERSION
+# File name of the mock-dpuagent binary inside the "dpuagent" build context.
+ARG DPUAGENT_FILE=mock-dpuagent
+
+ENV container=oci \
+    DEBIAN_FRONTEND=noninteractive
+
+# The VM cloud image already has systemd, so guest/install.sh does not install
+# it. kmod and procps are for the node-prep DaemonSet, which runs this image.
+# dbus, iproute2, iptables, conntrack, ethtool and socat are what kubelet, the
+# CNI plugins and kubeadm's preflight expect on a node. containerd is Ubuntu's
+# package, installed here rather than in guest/install.sh: the VM disk installs
+# the same package from customize-disk.sh, where a running systemd is absent.
+RUN test -n "${KUBE_APT_VERSION}" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      systemd systemd-sysv dbus kmod procps \
+      iproute2 iptables conntrack ethtool socat \
+      containerd \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY guest/install.sh /tmp/install.sh
+RUN KUBE_APT_VERSION="${KUBE_APT_VERSION}" /tmp/install.sh \
+ && rm -f /tmp/install.sh
+
+# The same files, at the same paths, as customize-disk.sh puts in the VM disk.
+COPY --from=dpuagent --chmod=0755 ${DPUAGENT_FILE} /opt/dpf/mock-dpuagent
+COPY --chmod=0755 guest/wait-kubelet-join.sh /opt/dpf/wait-kubelet-join.sh
+COPY --chmod=0644 guest/mock-dpuagent.service guest/wait-kubelet-join.service /usr/lib/systemd/system/
+COPY --chmod=0644 guest/10-flannel.conflist /etc/cni/net.d/10-flannel.conflist
+
+# The VM image starts both units from cloud-init.target. A container has no
+# cloud-init, so they hang off multi-user.target instead. Each unit's
+# ConditionPathExists keeps it from starting until the Pod's guest Secret is
+# mounted.
+RUN sed -i 's/^WantedBy=cloud-init.target$/WantedBy=multi-user.target/' \
+      /usr/lib/systemd/system/mock-dpuagent.service \
+      /usr/lib/systemd/system/wait-kubelet-join.service \
+ && systemctl enable mock-dpuagent.service wait-kubelet-join.service
+
+# Image-owned files live under /usr/lib/dpf-sim, never /etc/dpf-sim: the guest
+# Secret is mounted over /etc/dpf-sim and would hide them.
+COPY guest/kubeadm-join.args /usr/lib/dpf-sim/kubeadm-join.args
+COPY guest/kubeadm-patches/ /usr/lib/dpf-sim/kubeadm-patches/
+
+# The program of the node-prep DaemonSet's init container, which runs this
+# image to prepare the host kernel. The VM disk does not carry it.
+COPY --chmod=0755 guest/node-prep.sh /usr/lib/dpf-sim/node-prep.sh
+
+# The units a container must not run: loading modules would reach the host
+# kernel (that is host preparation), resolved would replace the Pod's cluster-DNS
+# resolv.conf, and the rest have no device, console or mount to manage.
+RUN systemctl mask \
+      systemd-modules-load.service \
+      systemd-resolved.service \
+      systemd-udevd.service \
+      getty@.service \
+      systemd-remount-fs.service
+
+COPY --chmod=0755 guest/container-entrypoint.sh /usr/local/bin/container-entrypoint.sh
+
+STOPSIGNAL SIGRTMIN+3
+ENTRYPOINT ["/usr/local/bin/container-entrypoint.sh"]

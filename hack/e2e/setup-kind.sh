@@ -69,12 +69,31 @@ fi
 # kind picks a random API server port by binding it locally first, which a
 # remote daemon's address cannot satisfy. Pinning the port skips that probe.
 KIND_API_SERVER_PORT="${KIND_API_SERVER_PORT:-6443}"
-KIND_NETWORKING=""
+
+# The pod-runtime e2e nests a DPU cluster inside the host cluster's Pods, and
+# the DPU cluster's kamaji service CIDR (10.96.0.0/16) is kind's default service
+# CIDR. Both subnets are opt-in so the VM e2e keeps kind's defaults: when a
+# variable is empty, its key is left out of the generated config.
+KIND_POD_SUBNET="${KIND_POD_SUBNET:-}"
+KIND_SERVICE_SUBNET="${KIND_SERVICE_SUBNET:-}"
+
+networking_lines=()
 if [[ -n "${KIND_API_SERVER_ADDRESS}" ]]; then
-	KIND_NETWORKING=$(printf '%s\n' \
-		'networking:' \
-		"  apiServerAddress: \"${KIND_API_SERVER_ADDRESS}\"" \
-		"  apiServerPort: ${KIND_API_SERVER_PORT}")
+	networking_lines+=(
+		"  apiServerAddress: \"${KIND_API_SERVER_ADDRESS}\""
+		"  apiServerPort: ${KIND_API_SERVER_PORT}"
+	)
+fi
+if [[ -n "${KIND_POD_SUBNET}" ]]; then
+	networking_lines+=("  podSubnet: \"${KIND_POD_SUBNET}\"")
+fi
+if [[ -n "${KIND_SERVICE_SUBNET}" ]]; then
+	networking_lines+=("  serviceSubnet: \"${KIND_SERVICE_SUBNET}\"")
+fi
+
+KIND_NETWORKING=""
+if ((${#networking_lines[@]} > 0)); then
+	KIND_NETWORKING=$(printf '%s\n' 'networking:' "${networking_lines[@]}")
 fi
 
 # Docker Desktop defaults the kind bridge to MTU 65535. KubeVirt tap/bridge

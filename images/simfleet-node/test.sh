@@ -69,6 +69,136 @@ assert_secret_read_once() {
 	fi
 }
 
+# test_container_image_contract pins the node-in-a-pod image's recipe. It reads
+# files only, so it needs neither Docker nor a built image.
+test_container_image_contract() {
+	local file dockerfile="${ROOT}/Dockerfile.container"
+	for file in Dockerfile.container verify-container.sh \
+		guest/container-entrypoint.sh guest/kubeadm-join.args \
+		"guest/kubeadm-patches/kubeletconfiguration+strategic.yaml"; do
+		test -f "${ROOT}/${file}" || fail "missing ${file}"
+	done
+	for file in verify-container.sh guest/container-entrypoint.sh; do
+		test -x "${ROOT}/${file}" || fail "${file} is not executable"
+		bash -n "${ROOT}/${file}" || fail "${file} does not parse"
+	done
+
+	# The join args file is one line, one argument, and nothing that waves
+	# preflight errors through.
+	local args="${ROOT}/guest/kubeadm-join.args"
+	[ "$(cat "${args}")" = '--patches=/usr/lib/dpf-sim/kubeadm-patches' ] \
+		|| fail "guest/kubeadm-join.args must hold exactly --patches=/usr/lib/dpf-sim/kubeadm-patches"
+	[ "$(wc -l < "${args}" | tr -d ' ')" = 1 ] || fail "guest/kubeadm-join.args must be one line"
+	assert_absent 'ignore-preflight-errors' "${args}"
+
+	# The kubelet patch overrides exactly what the container needs.
+	local patch="${ROOT}/guest/kubeadm-patches/kubeletconfiguration+strategic.yaml"
+	assert_matches '^apiVersion: kubelet\.config\.k8s\.io/v1beta1$' "${patch}"
+	assert_matches '^kind: KubeletConfiguration$' "${patch}"
+	assert_matches '^cgroupRoot: /$' "${patch}"
+	assert_matches '^failSwapOn: false$' "${patch}"
+	assert_matches '^evictionHard:$' "${patch}"
+	assert_matches '^  nodefs\.available: "0%"$' "${patch}"
+	assert_matches '^  nodefs\.inodesFree: "0%"$' "${patch}"
+	assert_matches '^  imagefs\.available: "0%"$' "${patch}"
+
+	# Dockerfile directives.
+	assert_matches '^FROM ubuntu:24\.04$' "${dockerfile}"
+	assert_matches '^ENV container=oci( |\\|$)' "${dockerfile}"
+	assert_matches '^STOPSIGNAL SIGRTMIN\+3$' "${dockerfile}"
+	assert_matches '^ENTRYPOINT \["/usr/local/bin/container-entrypoint\.sh"\]$' "${dockerfile}"
+	assert_matches '^ARG KUBE_APT_VERSION$' "${dockerfile}"
+	# lib.sh stays the only Kubernetes pin.
+	assert_absent '1.36' "${dockerfile}"
+	assert_contains 'KUBE_APT_VERSION="${KUBE_APT_VERSION}" /tmp/install.sh' "${dockerfile}"
+	assert_matches 'systemd( |$)' "${dockerfile}"
+	assert_matches '[[:space:]]kmod( |$)' "${dockerfile}"
+	assert_matches '[[:space:]]procps( |$)' "${dockerfile}"
+	assert_not_matches '^[^#]*qemu-guest-agent' "${dockerfile}"
+	assert_absent 'modules-load.d/simfleet.conf' "${dockerfile}"
+	# The same two units, binary and helper, at the same paths as the VM disk.
+	assert_contains 'guest/mock-dpuagent.service guest/wait-kubelet-join.service /usr/lib/systemd/system/' "${dockerfile}"
+	assert_contains '/opt/dpf/mock-dpuagent' "${dockerfile}"
+	assert_contains 'guest/wait-kubelet-join.sh /opt/dpf/wait-kubelet-join.sh' "${dockerfile}"
+	assert_contains 'systemctl enable mock-dpuagent.service wait-kubelet-join.service' "${dockerfile}"
+	# A container has no cloud-init.target, so both units move to multi-user.target.
+	assert_contains "sed -i 's/^WantedBy=cloud-init.target\$/WantedBy=multi-user.target/'" "${dockerfile}"
+	assert_contains 'guest/10-flannel.conflist /etc/cni/net.d/10-flannel.conflist' "${dockerfile}"
+	assert_contains 'guest/kubeadm-join.args /usr/lib/dpf-sim/kubeadm-join.args' "${dockerfile}"
+	assert_contains 'guest/kubeadm-patches/ /usr/lib/dpf-sim/kubeadm-patches/' "${dockerfile}"
+	# Outside comments, nothing may be put under /etc/dpf-sim: the guest Secret
+	# is mounted over it.
+	assert_not_matches '^[^#]*/etc/dpf-sim' "${dockerfile}"
+	local unit
+	for unit in systemd-modules-load.service systemd-resolved.service \
+		systemd-udevd.service 'getty@.service' systemd-remount-fs.service; do
+		assert_contains "${unit}" "${dockerfile}"
+	done
+	assert_contains 'systemctl mask' "${dockerfile}"
+	assert_matches 'guest/container-entrypoint\.sh /usr/local/bin/container-entrypoint\.sh' "${dockerfile}"
+
+	# The entrypoint.
+	local entrypoint="${ROOT}/guest/container-entrypoint.sh"
+	assert_contains 'exec unshare --cgroup' "${entrypoint}"
+	assert_contains 'umount /sys/fs/cgroup' "${entrypoint}"
+	assert_contains 'mount -t cgroup2' "${entrypoint}"
+	assert_contains '"0::/"' "${entrypoint}"
+	assert_contains '/proc/self/cgroup' "${entrypoint}"
+	assert_contains 'mount --make-rshared /' "${entrypoint}"
+	assert_contains '/sys/fs/cgroup/init.scope' "${entrypoint}"
+	assert_contains '/sys/fs/cgroup/cgroup.subtree_control' "${entrypoint}"
+	assert_contains ': > /etc/machine-id' "${entrypoint}"
+	assert_contains '/dev/kmsg' "${entrypoint}"
+	assert_matches '^exec /sbin/init$' "${entrypoint}"
+	assert_contains 'kind' "${entrypoint}"
+	# The cgroup check must come before anything touches the hierarchy, and
+	# init must be the last thing the script does.
+	local check_line move_line init_line
+	check_line="$(grep -n '"0::/"' "${entrypoint}" | head -1 | cut -d: -f1)"
+	move_line="$(grep -n 'init.scope/cgroup.procs' "${entrypoint}" | head -1 | cut -d: -f1)"
+	init_line="$(grep -n '^exec /sbin/init$' "${entrypoint}" | cut -d: -f1)"
+	[ "${check_line}" -lt "${move_line}" ] || fail "the entrypoint moves processes before checking its cgroup root"
+	[ "${move_line}" -lt "${init_line}" ] || fail "the entrypoint must exec /sbin/init last"
+	[ "${init_line}" = "$(grep -c '' "${entrypoint}")" ] || fail "nothing may follow exec /sbin/init"
+	assert_contains 'kind' "${ROOT}/../../THIRD_PARTY_NOTICES.md"
+	assert_contains 'images/simfleet-node/guest/container-entrypoint.sh' "${ROOT}/../../THIRD_PARTY_NOTICES.md"
+
+	# The Makefile target.
+	assert_contains 'node-container-image-build:' "${ROOT}/Makefile"
+	assert_contains 'NODE_CONTAINER_IMG ?= simfleet-node-container:local' "${ROOT}/Makefile"
+	assert_contains '--platform linux/amd64' "${ROOT}/Makefile"
+	assert_contains '-f Dockerfile.container' "${ROOT}/Makefile"
+	assert_contains '--build-arg KUBE_APT_VERSION="$(KUBE_APT_VERSION)"' "${ROOT}/Makefile"
+	assert_contains 'SIMFLEET_KUBE_APT_VERSION' "${ROOT}/Makefile"
+	assert_absent '1.36' "${ROOT}/Makefile"
+	assert_contains 'DPUAGENT_BIN' "${ROOT}/Makefile"
+	if command -v make > /dev/null 2>&1; then
+		make -s -n -C "${ROOT}" node-container-image-build DPUAGENT_BIN="${TMP}/mock" > "${TMP}/container-make.out" 2>&1 \
+			|| fail "make -n node-container-image-build failed"
+		assert_contains 'KUBE_APT_VERSION="1.36.4-1.1"' "${TMP}/container-make.out"
+		assert_contains "--build-context dpuagent=\"${TMP}/\"" "${TMP}/container-make.out"
+	fi
+
+	# The VM disk must not carry anything that only the container uses: the VM
+	# image ships no join-args file, kubelet patch or entrypoint.
+	for file in kubeadm-join.args kubeadm-patches container-entrypoint.sh \
+		/usr/lib/dpf-sim; do
+		assert_absent "${file}" "${ROOT}/customize-disk.sh"
+		assert_absent "${file}" "${ROOT}/Dockerfile"
+	done
+	assert_absent 'Dockerfile.container' "${ROOT}/customize-disk.sh"
+
+	# The verifier checks what the brief promises.
+	local verifier="${ROOT}/verify-container.sh"
+	assert_contains 'run -d --privileged' "${verifier}"
+	assert_contains 'running | degraded' "${verifier}"
+	assert_contains 'is-enabled kubelet.service' "${verifier}"
+	assert_contains 'mock-dpuagent.service' "${verifier}"
+	assert_contains 'wait-kubelet-join.service' "${verifier}"
+	assert_contains 'dpkg-query -W -f=' "${verifier}"
+	assert_contains 'SIMFLEET_KUBE_APT_VERSION' "${verifier}"
+}
+
 test_recipe_contract() {
 	local file
 	for file in Makefile build.sh build-cached.sh check-host.sh lib.sh \
@@ -114,23 +244,41 @@ test_recipe_contract() {
 	# The guest has to be ready for kubeadm join, not merely have the binaries.
 	assert_contains 'containerd config default > /etc/containerd/config.toml' "${ROOT}/guest/install.sh"
 	assert_contains 'SystemdCgroup = true' "${ROOT}/guest/install.sh"
-	assert_contains '/etc/modules-load.d/simfleet.conf' "${ROOT}/guest/install.sh"
 	assert_contains '/etc/sysctl.d/99-simfleet-k8s.conf' "${ROOT}/guest/install.sh"
 	assert_contains 'systemctl enable containerd' "${ROOT}/guest/install.sh"
+	# VM-only steps live in customize-disk.sh, not the shared guest/install.sh.
+	assert_contains '/etc/modules-load.d/simfleet.conf' "${ROOT}/customize-disk.sh"
+	assert_absent '/etc/modules-load.d/simfleet.conf' "${ROOT}/guest/install.sh"
+	assert_absent 'systemctl enable qemu-guest-agent.service' "${ROOT}/customize-disk.sh"
 	assert_absent 'systemctl enable qemu-guest-agent.service' "${ROOT}/guest/install.sh"
-	assert_contains $'\tqemu-guest-agent' "${ROOT}/guest/install.sh"
-	# apt in the guest has no DNS under virt-customize unless install.sh
+	assert_contains $'\tqemu-guest-agent' "${ROOT}/customize-disk.sh"
+	assert_absent 'qemu-guest-agent' "${ROOT}/guest/install.sh"
+	# apt in the guest has no DNS under virt-customize unless customize-disk.sh
 	# provides one, and the build-time resolver must not ship in the image.
 	assert_contains 'printf '"'"'nameserver 169.254.2.3\n'"'"' > /etc/resolv.conf' \
-		"${ROOT}/guest/install.sh"
-	assert_contains 'trap restore_resolv EXIT' "${ROOT}/guest/install.sh"
+		"${ROOT}/customize-disk.sh"
+	assert_contains 'trap restore_resolv EXIT' "${ROOT}/customize-disk.sh"
+	assert_absent '169.254.2.3' "${ROOT}/guest/install.sh"
+	assert_absent 'restore_resolv' "${ROOT}/guest/install.sh"
 	assert_contains 'apt-get clean' "${ROOT}/guest/install.sh"
 	assert_contains 'rm -rf /var/lib/apt/lists' "${ROOT}/guest/install.sh"
 	assert_contains 'apt-get install -y --no-install-recommends \' "${ROOT}/guest/install.sh"
-	assert_contains $'\tcontainerd' "${ROOT}/guest/install.sh"
-	if grep -Fq 'containerd.io' "${ROOT}/guest/install.sh"; then
-		fail "guest/install.sh must use Ubuntu's containerd package only"
-	fi
+	assert_contains 'containerd must be installed before guest/install.sh' "${ROOT}/guest/install.sh"
+	assert_absent $'\tcontainerd' "${ROOT}/guest/install.sh"
+	# The same Ubuntu package, installed by each image. The VM build blocks
+	# service starts because virt-customize has no systemd.
+	assert_contains 'apt-get install -y --no-install-recommends containerd' "${ROOT}/customize-disk.sh"
+	assert_contains 'printf '"'"'#!/bin/sh\nexit 101\n'"'"' > /usr/sbin/policy-rc.d' \
+		"${ROOT}/customize-disk.sh"
+	assert_contains 'rm -f /usr/sbin/policy-rc.d' "${ROOT}/customize-disk.sh"
+	assert_absent 'policy-rc.d' "${ROOT}/guest/install.sh"
+	assert_contains 'containerd \' "${ROOT}/Dockerfile.container"
+	assert_absent 'policy-rc.d' "${ROOT}/Dockerfile.container"
+	for file in guest/install.sh customize-disk.sh Dockerfile.container; do
+		if grep -Fq 'containerd.io' "${ROOT}/${file}"; then
+			fail "${file} must use Ubuntu's containerd package only"
+		fi
+	done
 	if grep -Fq '| head' "${ROOT}/guest/install.sh"; then
 		fail "guest version checks must not risk pipefail from an early-closing pipe"
 	fi
@@ -236,6 +384,8 @@ test_recipe_contract() {
 
 	assert_contains 'ExecStart=/opt/dpf/wait-kubelet-join.sh' \
 		"${ROOT}/guest/wait-kubelet-join.service"
+	assert_contains 'ConditionPathExists=/etc/dpf-sim/mgmt.kubeconfig' \
+		"${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'Type=oneshot' "${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'Restart=on-failure' "${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'StartLimitIntervalSec=0' "${ROOT}/guest/wait-kubelet-join.service"
@@ -250,6 +400,8 @@ test_recipe_contract() {
 	assert_not_matches '^(After|Before|Requires|Requisite|Wants|BindsTo)=.*mock-dpuagent' \
 		"${ROOT}/guest/wait-kubelet-join.service"
 	assert_contains 'ExecStartPre=/usr/bin/test -s /etc/mock-dpuagent/config.yaml' \
+		"${ROOT}/guest/mock-dpuagent.service"
+	assert_contains 'ConditionPathExists=/etc/mock-dpuagent/config.yaml' \
 		"${ROOT}/guest/mock-dpuagent.service"
 	assert_contains 'ExecStart=/opt/dpf/mock-dpuagent --config=/etc/mock-dpuagent/config.yaml' \
 		"${ROOT}/guest/mock-dpuagent.service"
@@ -1103,16 +1255,114 @@ run_join_helper() {
 	local root="$1"
 	shift
 	(
+		: > "${root}/proc-config.gz"
 		env PATH="${root}/bin:${PATH}" JOIN_CALLS="${root}/calls" \
 			IDENTITY_FILE="${root}/etc/identity.env" \
 			MGMT_KUBECONFIG="${root}/etc/mgmt.kubeconfig" \
 			KUBELET_CONF="${root}/etc/kubelet.conf" \
+			KERNEL_CONFIG_PROC="${root}/proc-config.gz" \
 			JOIN_ATTEMPTS=2 JOIN_INTERVAL=0 \
 			"FAKE_DPU_UID=${JOIN_DPU_UID}" \
 			"FAKE_SECRET_RESPONSE=${JOIN_SECRET_RESPONSE}" \
 			"$@" "${ROOT}/guest/wait-kubelet-join.sh"
 	) > "${root}/out" 2>&1
 }
+
+# test_join_args_hook checks append_image_join_args without running the join loop.
+# The body is a subshell, so sourcing the helper cannot replace fail() or any
+# other function or variable of this shell.
+test_join_args_hook() (
+	local hook_tmp="${TMP}/join-args-hook"
+	rm -rf "${hook_tmp}"
+	mkdir -p "${hook_tmp}"
+
+	source_join_hook() {
+		# shellcheck disable=SC1090
+		WAIT_KUBELET_JOIN_SOURCE_ONLY=1 \
+			source "${ROOT}/guest/wait-kubelet-join.sh"
+	}
+
+	JOIN_ARGS_FILE="${hook_tmp}/missing.args"
+	source_join_hook
+	join_argv=(kubeadm join 10.0.0.1:6443 --token abcdef.0123456789abcdef)
+	append_image_join_args
+	test "${#join_argv[@]}" -eq 5 \
+		|| fail "missing join args file changed join_argv length (got ${#join_argv[@]})"
+	test "${join_argv[0]}" = kubeadm \
+		&& test "${join_argv[4]}" = abcdef.0123456789abcdef \
+		|| fail "missing join args file changed join_argv contents"
+
+	printf '%s\n' \
+		'--patches=/usr/lib/dpf-sim/kubeadm-patches' \
+		'--v=2' > "${hook_tmp}/present.args"
+	JOIN_ARGS_FILE="${hook_tmp}/present.args"
+	source_join_hook
+	join_argv=(kubeadm join 10.0.0.1:6443 --token abcdef.0123456789abcdef)
+	append_image_join_args
+	test "${#join_argv[@]}" -eq 7 \
+		|| fail "present join args file: expected 7 argv entries, got ${#join_argv[@]}"
+	test "${join_argv[5]}" = '--patches=/usr/lib/dpf-sim/kubeadm-patches' \
+		|| fail "first appended join arg missing or out of order"
+	test "${join_argv[6]}" = '--v=2' \
+		|| fail "second appended join arg missing or out of order"
+
+	printf '%s\n' '$(echo pwned)' > "${hook_tmp}/literal.args"
+	JOIN_ARGS_FILE="${hook_tmp}/literal.args"
+	source_join_hook
+	join_argv=(kubeadm join 10.0.0.1:6443 --token abcdef.0123456789abcdef)
+	append_image_join_args
+	test "${#join_argv[@]}" -eq 6 \
+		|| fail "literal join arg: expected 6 argv entries, got ${#join_argv[@]}"
+	test "${join_argv[5]}" = '$(echo pwned)' \
+		|| fail "join arg line was interpreted instead of appended literally"
+
+	printf '\n--v=3\n\n--v=4\n' > "${hook_tmp}/blank-lines.args"
+	JOIN_ARGS_FILE="${hook_tmp}/blank-lines.args"
+	source_join_hook
+	join_argv=(kubeadm join 10.0.0.1:6443 --token abcdef.0123456789abcdef)
+	append_image_join_args
+	test "${#join_argv[@]}" -eq 7 \
+		|| fail "blank lines: expected 7 argv entries, got ${#join_argv[@]}"
+	test "${join_argv[5]}" = '--v=3' \
+		&& test "${join_argv[6]}" = '--v=4' \
+		|| fail "blank lines were not skipped"
+)
+
+# test_kernel_config_for_kubeadm checks that a guest with no kernel config
+# gains /boot/config-$(uname -r) before kubeadm join, and that an existing
+# config is left alone.
+test_kernel_config_for_kubeadm() (
+	local dir="${TMP}/kernel-config"
+	rm -rf "${dir}"
+	mkdir -p "${dir}"
+	# shellcheck disable=SC1090
+	WAIT_KUBELET_JOIN_SOURCE_ONLY=1 source "${ROOT}/guest/wait-kubelet-join.sh"
+
+	KERNEL_CONFIG_PROC="${dir}/missing-proc-config.gz" \
+		KERNEL_CONFIG_FILE="${dir}/boot/config-test" \
+		ensure_kernel_config
+	[ -f "${dir}/boot/config-test" ] || fail "ensure_kernel_config did not write a kernel config"
+	grep -q '^CONFIG_NAMESPACES=y$' "${dir}/boot/config-test" \
+		|| fail "written kernel config is missing CONFIG_NAMESPACES"
+	grep -q '^CONFIG_CGROUP_BPF=y$' "${dir}/boot/config-test" \
+		|| fail "written kernel config is missing CONFIG_CGROUP_BPF"
+
+	printf '%s\n' 'CONFIG_NAMESPACES=n' > "${dir}/boot/config-test"
+	KERNEL_CONFIG_PROC="${dir}/missing-proc-config.gz" \
+		KERNEL_CONFIG_FILE="${dir}/boot/config-test" \
+		ensure_kernel_config
+	grep -q '^CONFIG_NAMESPACES=n$' "${dir}/boot/config-test" \
+		|| fail "ensure_kernel_config rewrote an existing kernel config"
+
+	printf '%s\n' 'present' > "${dir}/proc-config.gz"
+	rm -f "${dir}/boot/config-from-proc"
+	KERNEL_CONFIG_PROC="${dir}/proc-config.gz" \
+		KERNEL_CONFIG_FILE="${dir}/boot/config-from-proc" \
+		ensure_kernel_config
+	[ ! -e "${dir}/boot/config-from-proc" ] \
+		|| fail "ensure_kernel_config wrote a config when /proc/config.gz exists"
+	echo "PASS: kernel config for kubeadm"
+)
 
 test_join_helper_configures_kubelet_from_the_secret() {
 	local root
@@ -1693,7 +1943,326 @@ test_verifier_rejects_build_time_resolver() {
 	assert_contains 'build-time QEMU nameserver' "${TMP}/verify-resolv-baked.out"
 }
 
+# node-prep.sh runs as an init container on the host's kernel, so these tests
+# put stubs for modprobe, sysctl and nproc on PATH and never need root. The
+# stubs keep their state under ${NP_STUB}: sysctl values are files named after
+# the key, and the nf_conntrack module is "loaded" when
+# ${NP_STUB}/sys-module/nf_conntrack exists.
+np_setup() {
+	NP_STUB="${TMP}/node-prep-$1"
+	rm -rf "${NP_STUB}"
+	mkdir -p "${NP_STUB}/bin" "${NP_STUB}/sysctl" "${NP_STUB}/sys-module" \
+		"${NP_STUB}/cgroup"
+	: > "${NP_STUB}/cgroup/cgroup.controllers"
+	: > "${NP_STUB}/modprobe.log"
+	: > "${NP_STUB}/sysctl-writes.log"
+	echo 128 > "${NP_STUB}/sysctl/fs.inotify.max_user_instances"
+	echo 8192 > "${NP_STUB}/sysctl/fs.inotify.max_user_watches"
+	echo 32768 > "${NP_STUB}/sysctl/kernel.pid_max"
+	echo 65536 > "${NP_STUB}/sysctl/net.netfilter.nf_conntrack_max"
+
+	cat > "${NP_STUB}/bin/modprobe" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "${NP_STUB}/modprobe.log"
+if [ "${FAKE_MODPROBE_FAIL:-}" = "$1" ]; then
+	echo "modprobe: FATAL: Module $1 not found in directory /lib/modules/fake" >&2
+	exit 1
+fi
+if [ "$1" = nf_conntrack ] && [ ! -d "${NP_STUB}/sys-module/nf_conntrack" ]; then
+	mkdir -p "${NP_STUB}/sys-module/nf_conntrack/parameters"
+	size=16384
+	case "${2:-}" in hashsize=*) size="${2#hashsize=}" ;; esac
+	echo "${size}" > "${NP_STUB}/sys-module/nf_conntrack/parameters/hashsize"
+fi
+exit 0
+STUB
+	cat > "${NP_STUB}/bin/sysctl" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+-n)
+	test -f "${NP_STUB}/sysctl/$2" || { echo "sysctl: cannot stat $2" >&2; exit 1; }
+	cat "${NP_STUB}/sysctl/$2"
+	;;
+-w)
+	key="${2%%=*}"
+	value="${2#*=}"
+	echo "${key}=${value}" >> "${NP_STUB}/sysctl-writes.log"
+	case " ${FAKE_SYSCTL_FAIL:-} " in
+	*" ${key} "*)
+		echo "sysctl: setting key \"${key}\": Read-only file system" >&2
+		exit 1
+		;;
+	esac
+	# A write the kernel accepts but does not keep, such as a clamp.
+	case " ${FAKE_SYSCTL_NOSTICK:-} " in
+	*" ${key} "*) exit 0 ;;
+	esac
+	echo "${value}" > "${NP_STUB}/sysctl/${key}"
+	;;
+*)
+	echo "unexpected sysctl arguments: $*" >&2
+	exit 2
+	;;
+esac
+STUB
+	cat > "${NP_STUB}/bin/nproc" <<'STUB'
+#!/usr/bin/env bash
+echo "${FAKE_NPROC:-4}"
+STUB
+	chmod +x "${NP_STUB}/bin/modprobe" "${NP_STUB}/bin/sysctl" "${NP_STUB}/bin/nproc"
+}
+
+# np_run <name> [VAR=value ...] runs node-prep.sh against the stubs. Its output
+# lands in ${TMP}/node-prep-<name>.out and its exit status is the return value.
+np_run() {
+	local name="$1"
+	shift
+	# The caller's environment must not move the floors: only the VAR=value
+	# arguments may set them.
+	env -u INOTIFY_MAX_USER_INSTANCES -u INOTIFY_MAX_USER_WATCHES -u DPU_SLOTS \
+		PATH="${NP_STUB}/bin:${PATH}" NP_STUB="${NP_STUB}" \
+		NODE_PREP_CGROUP_ROOT="${NP_STUB}/cgroup" \
+		NODE_PREP_SYS_MODULE="${NP_STUB}/sys-module" \
+		"$@" bash "${ROOT}/guest/node-prep.sh" > "${TMP}/node-prep-${name}.out" 2>&1
+}
+
+np_value() {
+	cat "${NP_STUB}/sysctl/$1"
+}
+
+test_node_prep_sets_the_host_up() {
+	local script="${ROOT}/guest/node-prep.sh"
+	test -x "${script}" || fail "guest/node-prep.sh is missing or not executable"
+	bash -n "${script}" || fail "guest/node-prep.sh does not parse"
+
+	np_setup defaults
+	np_run defaults FAKE_NPROC=4 || {
+		cat "${TMP}/node-prep-defaults.out" >&2
+		fail "node-prep.sh failed on a healthy host"
+	}
+	[ "$(np_value fs.inotify.max_user_instances)" = 8192 ] || fail "inotify instances not raised to 8192"
+	[ "$(np_value fs.inotify.max_user_watches)" = 1048576 ] || fail "inotify watches not raised to 1048576"
+	# 45 PIDs per slot at the default of 270 slots.
+	[ "$(np_value kernel.pid_max)" = 32768 ] || fail "pid_max must not decrease below the live 32768"
+	# 4 CPUs: max(32768*4, 131072) = 131072, and a hash of at least a quarter.
+	[ "$(np_value net.netfilter.nf_conntrack_max)" = 131072 ] || fail "nf_conntrack_max is not 131072 for 4 CPUs"
+	# nf_conntrack is loaded first, with its hash size, so br_netfilter's
+	# dependency load cannot create the table at the default size.
+	[ "$(sed -n 1p "${NP_STUB}/modprobe.log")" = "nf_conntrack hashsize=32768" ] \
+		|| fail "nf_conntrack must be loaded first with hashsize=32768: $(cat "${NP_STUB}/modprobe.log")"
+	local module
+	for module in overlay br_netfilter vxlan; do
+		assert_contains "${module}" "${NP_STUB}/modprobe.log"
+	done
+
+	# The floor follows DPU_SLOTS: 45 PIDs per DPU.
+	np_setup slots
+	np_run slots DPU_SLOTS=1000 || fail "node-prep.sh failed with DPU_SLOTS=1000"
+	[ "$(np_value kernel.pid_max)" = 45000 ] || fail "pid_max is not 45*DPU_SLOTS for DPU_SLOTS=1000"
+
+	# The floors come from the environment.
+	np_setup floors
+	np_run floors INOTIFY_MAX_USER_INSTANCES=16384 INOTIFY_MAX_USER_WATCHES=2097152 \
+		|| fail "node-prep.sh failed with explicit inotify floors"
+	[ "$(np_value fs.inotify.max_user_instances)" = 16384 ] || fail "INOTIFY_MAX_USER_INSTANCES was ignored"
+	[ "$(np_value fs.inotify.max_user_watches)" = 2097152 ] || fail "INOTIFY_MAX_USER_WATCHES was ignored"
+
+	# conntrack follows the CPU count, with a floor of 131072 and a hash of at
+	# least a quarter of the maximum.
+	np_setup cpu8
+	np_run cpu8 FAKE_NPROC=8 || fail "node-prep.sh failed with 8 CPUs"
+	[ "$(np_value net.netfilter.nf_conntrack_max)" = 262144 ] || fail "nf_conntrack_max is not 262144 for 8 CPUs"
+	assert_contains 'nf_conntrack hashsize=65536' "${NP_STUB}/modprobe.log"
+	np_setup cpu1
+	np_run cpu1 FAKE_NPROC=1 || fail "node-prep.sh failed with 1 CPU"
+	[ "$(np_value net.netfilter.nf_conntrack_max)" = 131072 ] || fail "nf_conntrack_max is not floored at 131072 for 1 CPU"
+
+	# A table that is already larger is brought to exactly the target, because
+	# nf_conntrack_max is not a floor.
+	np_setup exact
+	echo 999999 > "${NP_STUB}/sysctl/net.netfilter.nf_conntrack_max"
+	np_run exact FAKE_NPROC=4 || fail "node-prep.sh failed when conntrack was above the target"
+	[ "$(np_value net.netfilter.nf_conntrack_max)" = 131072 ] || fail "nf_conntrack_max is a floor, not the target"
+}
+
+test_node_prep_never_decreases_a_sysctl() {
+	np_setup high
+	echo 65536 > "${NP_STUB}/sysctl/fs.inotify.max_user_instances"
+	echo 4194304 > "${NP_STUB}/sysctl/fs.inotify.max_user_watches"
+	echo 4194304 > "${NP_STUB}/sysctl/kernel.pid_max"
+	np_run high || fail "node-prep.sh failed with sysctls above their floors"
+	[ "$(np_value fs.inotify.max_user_instances)" = 65536 ] || fail "inotify instances were lowered"
+	[ "$(np_value fs.inotify.max_user_watches)" = 4194304 ] || fail "inotify watches were lowered"
+	[ "$(np_value kernel.pid_max)" = 4194304 ] || fail "pid_max was lowered"
+	assert_absent 'fs.inotify' "${NP_STUB}/sysctl-writes.log"
+	assert_absent 'kernel.pid_max' "${NP_STUB}/sysctl-writes.log"
+}
+
+test_node_prep_fails_on_a_missing_module() {
+	local module
+	for module in overlay br_netfilter vxlan nf_conntrack; do
+		np_setup "module-${module}"
+		if np_run "module-${module}" FAKE_MODPROBE_FAIL="${module}"; then
+			fail "node-prep.sh succeeded although ${module} cannot be loaded"
+		fi
+		assert_contains "${module}" "${TMP}/node-prep-module-${module}.out"
+	done
+}
+
+test_node_prep_fails_on_an_unwritable_sysctl() {
+	local key
+	for key in fs.inotify.max_user_instances fs.inotify.max_user_watches \
+		kernel.pid_max net.netfilter.nf_conntrack_max; do
+		np_setup "unwritable-${key}"
+		# Below its floor, so the script has to write it.
+		echo 1000 > "${NP_STUB}/sysctl/kernel.pid_max"
+		if np_run "unwritable-${key}" FAKE_SYSCTL_FAIL="${key}"; then
+			fail "node-prep.sh succeeded although ${key} cannot be written"
+		fi
+		assert_contains "${key}" "${TMP}/node-prep-unwritable-${key}.out"
+	done
+
+	# A write the kernel accepts but does not keep is a failure too.
+	np_setup nostick
+	echo 1000 > "${NP_STUB}/sysctl/kernel.pid_max"
+	if np_run nostick FAKE_SYSCTL_NOSTICK=kernel.pid_max; then
+		fail "node-prep.sh succeeded although kernel.pid_max did not stick"
+	fi
+	assert_contains 'kernel.pid_max' "${TMP}/node-prep-nostick.out"
+	np_setup nostick-inotify
+	if np_run nostick-inotify FAKE_SYSCTL_NOSTICK=fs.inotify.max_user_watches; then
+		fail "node-prep.sh succeeded although the inotify raise did not stick"
+	fi
+}
+
+test_node_prep_requires_cgroup_v2() {
+	np_setup cgroupv1
+	rm -f "${NP_STUB}/cgroup/cgroup.controllers"
+	if np_run cgroupv1; then
+		fail "node-prep.sh succeeded on a cgroup v1 host"
+	fi
+	assert_contains 'cgroup v2' "${TMP}/node-prep-cgroupv1.out"
+	# Nothing may be changed on a host that cannot be fixed at runtime.
+	[ ! -s "${NP_STUB}/modprobe.log" ] || fail "node-prep.sh loaded modules before the cgroup check"
+	[ ! -s "${NP_STUB}/sysctl-writes.log" ] || fail "node-prep.sh wrote sysctls before the cgroup check"
+}
+
+test_node_prep_leaves_conntrack_at_the_target() {
+	# Kind's hostNetwork is not the initial network namespace, so a write there
+	# would fail even though the Docker host's preset already holds.
+	np_setup conntrack-ok
+	echo 131072 > "${NP_STUB}/sysctl/net.netfilter.nf_conntrack_max"
+	np_run conntrack-ok FAKE_NPROC=4 FAKE_SYSCTL_FAIL=net.netfilter.nf_conntrack_max \
+		|| {
+			cat "${TMP}/node-prep-conntrack-ok.out" >&2
+			fail "node-prep.sh failed although nf_conntrack_max is already at the target"
+		}
+	assert_absent 'nf_conntrack_max' "${NP_STUB}/sysctl-writes.log"
+}
+
+test_node_prep_sizes_the_conntrack_hash() {
+	# Loaded already, hash too small: raised through the module parameter.
+	np_setup hash-raise
+	mkdir -p "${NP_STUB}/sys-module/nf_conntrack/parameters"
+	echo 16384 > "${NP_STUB}/sys-module/nf_conntrack/parameters/hashsize"
+	np_run hash-raise FAKE_NPROC=4 || {
+		cat "${TMP}/node-prep-hash-raise.out" >&2
+		fail "node-prep.sh failed raising the conntrack hash of a loaded module"
+	}
+	[ "$(cat "${NP_STUB}/sys-module/nf_conntrack/parameters/hashsize")" = 32768 ] \
+		|| fail "the loaded conntrack hash was not raised to a quarter of the maximum"
+
+	# Loaded already, hash big enough: left alone.
+	np_setup hash-ok
+	mkdir -p "${NP_STUB}/sys-module/nf_conntrack/parameters"
+	echo 262144 > "${NP_STUB}/sys-module/nf_conntrack/parameters/hashsize"
+	np_run hash-ok FAKE_NPROC=4 || fail "node-prep.sh failed with a large enough conntrack hash"
+	[ "$(cat "${NP_STUB}/sys-module/nf_conntrack/parameters/hashsize")" = 262144 ] \
+		|| fail "a conntrack hash above the floor was lowered"
+
+	# A hash that cannot be raised is a failure.
+	np_setup hash-stuck
+	mkdir -p "${NP_STUB}/sys-module/nf_conntrack/parameters"
+	echo 16384 > "${NP_STUB}/sys-module/nf_conntrack/parameters/hashsize"
+	chmod 0444 "${NP_STUB}/sys-module/nf_conntrack/parameters/hashsize"
+	# Root ignores file modes, so the read-only file only proves anything
+	# for an unprivileged test run.
+	if [ ! -w "${NP_STUB}/sys-module/nf_conntrack/parameters/hashsize" ]; then
+		if np_run hash-stuck FAKE_NPROC=4; then
+			fail "node-prep.sh succeeded although the conntrack hash cannot be raised"
+		fi
+		assert_contains 'hashsize' "${TMP}/node-prep-hash-stuck.out"
+	fi
+}
+
+test_node_prep_is_only_in_the_container_image() {
+	local dockerfile="${ROOT}/Dockerfile.container"
+	assert_matches '^COPY --chmod=0755 guest/node-prep\.sh /usr/lib/dpf-sim/node-prep\.sh$' "${dockerfile}"
+	assert_absent 'node-prep' "${ROOT}/customize-disk.sh"
+	assert_absent 'node-prep' "${ROOT}/Dockerfile"
+}
+
+test_node_prep_manifests() {
+	local dir="${ROOT}/../../config/node-prep" file
+	for file in kustomization.yaml configmap.yaml daemonset.yaml; do
+		test -f "${dir}/${file}" || fail "missing config/node-prep/${file}"
+	done
+	assert_contains 'daemonset.yaml' "${dir}/kustomization.yaml"
+	assert_contains 'configmap.yaml' "${dir}/kustomization.yaml"
+	assert_absent 'namespace' "${dir}/kustomization.yaml"
+	assert_absent 'namespace:' "${dir}/daemonset.yaml"
+	assert_absent 'namespace:' "${dir}/configmap.yaml"
+
+	local ds="${dir}/daemonset.yaml"
+	assert_matches '^kind: DaemonSet$' "${ds}"
+	assert_matches '^  name: simfleet-node-prep$' "${ds}"
+	assert_contains 'scale.dpu.nvidia.com/sim-node: "true"' "${ds}"
+	assert_contains 'key: scale.dpu.nvidia.com/sim-node' "${ds}"
+	assert_contains 'operator: Equal' "${ds}"
+	assert_contains 'value: "true"' "${ds}"
+	assert_contains 'effect: NoSchedule' "${ds}"
+	assert_contains 'hostNetwork: true' "${ds}"
+	assert_contains 'image: simfleet-node-container:local' "${ds}"
+	assert_contains '/usr/lib/dpf-sim/node-prep.sh' "${ds}"
+	assert_contains 'privileged: true' "${ds}"
+	assert_contains 'path: /lib/modules' "${ds}"
+	assert_contains 'mountPath: /lib/modules' "${ds}"
+	assert_contains 'image: registry.k8s.io/pause:3.10' "${ds}"
+	assert_contains 'configMapRef' "${ds}"
+	# Only the init container is privileged.
+	[ "$(grep -c 'privileged: true' "${ds}")" = 1 ] || fail "only the init container may be privileged"
+	local init_line pause_line priv_line
+	init_line="$(grep -n 'initContainers:' "${ds}" | head -1 | cut -d: -f1)"
+	pause_line="$(grep -n 'image: registry.k8s.io/pause:3.10' "${ds}" | head -1 | cut -d: -f1)"
+	priv_line="$(grep -n 'privileged: true' "${ds}" | head -1 | cut -d: -f1)"
+	[ "${init_line}" -lt "${priv_line}" ] && [ "${priv_line}" -lt "${pause_line}" ] \
+		|| fail "privileged must belong to the init container, ahead of the pause container"
+
+	local cm="${dir}/configmap.yaml"
+	assert_matches '^kind: ConfigMap$' "${cm}"
+	assert_contains 'INOTIFY_MAX_USER_INSTANCES: "8192"' "${cm}"
+	assert_contains 'INOTIFY_MAX_USER_WATCHES: "1048576"' "${cm}"
+	assert_contains 'DPU_SLOTS: "270"' "${cm}"
+
+	# kubectl can render the kustomization offline.
+	if command -v kubectl > /dev/null 2>&1; then
+		kubectl kustomize "${dir}" > "${TMP}/node-prep-kustomize.out" 2>&1 \
+			|| { cat "${TMP}/node-prep-kustomize.out" >&2; fail "kubectl kustomize config/node-prep failed"; }
+		assert_contains 'name: simfleet-node-prep' "${TMP}/node-prep-kustomize.out"
+	fi
+}
+
 test_recipe_contract
+test_container_image_contract
+test_node_prep_sets_the_host_up
+test_node_prep_never_decreases_a_sysctl
+test_node_prep_fails_on_a_missing_module
+test_node_prep_fails_on_an_unwritable_sysctl
+test_node_prep_requires_cgroup_v2
+test_node_prep_leaves_conntrack_at_the_target
+test_node_prep_sizes_the_conntrack_hash
+test_node_prep_is_only_in_the_container_image
+test_node_prep_manifests
 test_source_hash
 test_build_orchestration
 test_build_requires_dpuagent_binary
@@ -1714,6 +2283,8 @@ test_cached_build_reuses_matching_source_hash
 test_cached_build_rebuilds_on_recipe_change
 test_cached_build_rebuilds_on_image_version_change
 test_cached_build_never_trusts_a_bare_tag
+test_join_args_hook
+test_kernel_config_for_kubeadm
 test_join_helper_configures_kubelet_from_the_secret
 test_join_helper_is_idempotent_once_kubelet_is_configured
 test_join_helper_waits_for_configure_kubelet

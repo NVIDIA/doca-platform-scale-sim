@@ -1,5 +1,6 @@
 [Unit]
 Description=DPF mock DPU (Redfish BMC + fake dpu-agent)
+ConditionPathExists=/etc/mock-dpuagent/config.yaml
 After=network-online.target cloud-final.service
 Wants=network-online.target
 StartLimitIntervalSec=0

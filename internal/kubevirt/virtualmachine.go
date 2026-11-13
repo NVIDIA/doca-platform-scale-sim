@@ -54,6 +54,13 @@ var (
 	}
 )
 
+// ErrNotInstalled is the TemplateError a fleet with a VirtualMachine template
+// reports while the cluster does not serve KubeVirt's API.
+var ErrNotInstalled = &TemplateError{
+	Reason:  "KubeVirtNotInstalled",
+	Message: "KubeVirt is not installed, so virtualMachineTemplate cannot be used",
+}
+
 func newUnsupportedRunStrategyError(strategy string) error {
 	return &TemplateError{
 		Reason:  "UnsupportedRunStrategy",
