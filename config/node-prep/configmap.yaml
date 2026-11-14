@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simfleet-node-prep
+data:
+  # The floors node-prep.sh raises the host to; it never lowers a live value.
+  INOTIFY_MAX_USER_INSTANCES: "8192"
+  INOTIFY_MAX_USER_WATCHES: "1048576"
+  # DPUs per host. kernel.pid_max is raised to at least 45 PIDs per slot. The
+  # default follows the inotify budget of 8192 instances at about 30 per DPU.
+  DPU_SLOTS: "270"

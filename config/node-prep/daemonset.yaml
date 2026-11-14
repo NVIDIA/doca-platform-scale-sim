@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: simfleet-node-prep
+  labels:
+    app.kubernetes.io/name: simfleet-node-prep
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: simfleet-node-prep
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: simfleet-node-prep
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        scale.dpu.nvidia.com/sim-node: "true"
+      tolerations:
+        - key: scale.dpu.nvidia.com/sim-node
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      # The init container prepares the host kernel and exits. The pause
+      # container only keeps the Pod, so a Ready Pod means preparation
+      # succeeded.
+      initContainers:
+        - name: node-prep
+          image: simfleet-node-container:local
+          command:
+            - /usr/lib/dpf-sim/node-prep.sh
+          envFrom:
+            - configMapRef:
+                name: simfleet-node-prep
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+      volumes:
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
