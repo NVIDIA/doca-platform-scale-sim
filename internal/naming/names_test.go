@@ -56,6 +56,15 @@ var _ = Describe("Names", func() {
 		Expect(VirtualMachineName("scale-3000", 0)).To(Equal("scale-3000-dpu-000000"))
 	})
 
+	It("names a guest by fleet and zero-padded ordinal, the same as its virtual machine", func() {
+		Expect(GuestName("scale-3000", 7)).To(Equal("scale-3000-dpu-000007"))
+		Expect(VirtualMachineName("scale-3000", 7)).To(Equal(GuestName("scale-3000", 7)))
+	})
+
+	It("names the guest Secret after the guest", func() {
+		Expect(GuestSecretName("scale-3000", 7)).To(Equal("scale-3000-dpu-000007-guest"))
+	})
+
 	It("names the cloud-init Secret after the virtual machine", func() {
 		Expect(CloudInitSecretName("scale-3000", 0)).To(Equal("scale-3000-dpu-000000-cloud-init"))
 	})

@@ -39,7 +39,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
@@ -52,6 +51,10 @@ type SimFleetReconciler struct {
 	// MaxConcurrentReconciles bounds parallel fleet reconciles. Zero uses
 	// the controller-runtime default.
 	MaxConcurrentReconciles int
+	// KubeVirtInstalled reports whether the cluster serves KubeVirt's API. A
+	// fleet with a virtualMachineTemplate reports KubeVirtNotInstalled
+	// without it.
+	KubeVirtInstalled bool
 }
 
 // +kubebuilder:rbac:groups=scale.dpu.nvidia.com,resources=simfleets,verbs=get;list;watch;create;update;patch;delete
@@ -174,11 +177,12 @@ func aggregateStatus(
 	fleet *scalev1alpha1.SimFleet,
 	instances map[int]*scalev1alpha1.SimInstance,
 	dpuNodes int,
+	kubeVirtInstalled bool,
 ) scalev1alpha1.SimFleetStatus {
 	status := *fleet.Status.DeepCopy()
 	replicas := fleet.Spec.Replicas
 	admitted := status.AdmittedReplicas
-	templateErr := kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate)
+	templateErr := guestTemplateError(fleet, kubeVirtInstalled)
 
 	var created, guestReady, provisioned, failed int
 	observation := dpuObservation{}
@@ -251,7 +255,7 @@ func (r *SimFleetReconciler) patchFleetStatus(
 	base := fleet.DeepCopy()
 	stored := base.Status.AdmittedReplicas
 	fleet.Status.AdmittedReplicas = max(admitted, min(stored, fleet.Spec.Replicas))
-	fleet.Status = aggregateStatus(fleet, instances, dpuNodes)
+	fleet.Status = aggregateStatus(fleet, instances, dpuNodes, r.KubeVirtInstalled)
 	if conflict != "" {
 		meta.SetStatusCondition(&fleet.Status.Conditions, metav1.Condition{
 			Type:               scalev1alpha1.ConditionInventoryReconciled,
@@ -369,7 +373,7 @@ func bootstrapReconciledCondition(
 		// configuration this pass still refuses outright.
 		condition.Reason = conditionReason(bootstrap.err)
 		condition.Message = bootstrap.err.Error()
-	case fleet.Spec.VirtualMachineTemplate == nil:
+	case !fleetBootsGuests(fleet):
 		condition.Message = "No guest bootstrap is required"
 	case desiredVMs == 0:
 		condition.Message = "No device is ready to boot a guest"
@@ -412,7 +416,7 @@ func guestsReadyCondition(
 		Message:            fmt.Sprintf("Created %d of %d desired guests", guestCount, desiredGuests),
 	}
 	switch {
-	case fleet.Spec.VirtualMachineTemplate == nil || desiredGuests == 0:
+	case !fleetBootsGuests(fleet) || desiredGuests == 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = "Ready"
 		condition.Message = "No guests are required"

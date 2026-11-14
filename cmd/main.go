@@ -28,6 +28,7 @@ import (
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/component-base/logs"
 	logsv1 "k8s.io/component-base/logs/api/v1"
@@ -41,6 +42,7 @@ import (
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/controller"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -128,6 +130,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// KubeVirt is optional: a fleet with a podTemplate runs without it. The
+	// VirtualMachine watches exist only when the cluster serves its API.
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(managementConfig)
+	if err != nil {
+		setupLog.Error(err, "Failed to create discovery client")
+		os.Exit(1)
+	}
+	kubeVirtInstalled, err := kubevirt.Installed(discoveryClient)
+	if err != nil {
+		setupLog.Error(err, "Failed to discover KubeVirt")
+		os.Exit(1)
+	}
+	setupLog.Info("Discovered KubeVirt", "installed", kubeVirtInstalled)
+
 	mgr, err := ctrl.NewManager(managementConfig, ctrl.Options{
 		Scheme:                 scheme,
 		Cache:                  controller.ManagerCacheOptions(),
@@ -161,6 +177,7 @@ func main() {
 		Client:                  mgr.GetClient(),
 		Scheme:                  mgr.GetScheme(),
 		MaxConcurrentReconciles: simFleetConcurrency,
+		KubeVirtInstalled:       kubeVirtInstalled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "simfleet")
 		os.Exit(1)
@@ -176,6 +193,7 @@ func main() {
 		ManagementCA:              managementCA,
 		Recorder:                  recorder,
 		MaxConcurrentReconciles:   simInstanceConcurrency,
+		KubeVirtInstalled:         kubeVirtInstalled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "siminstance")
 		os.Exit(1)
