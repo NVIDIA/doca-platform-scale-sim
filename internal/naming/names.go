@@ -52,10 +52,24 @@ func SerialNumber(fleet string, ordinal int) string {
 	return fmt.Sprintf("MT%04d%06d", h.Sum32()%10000, ordinal)
 }
 
-// VirtualMachineName is the deterministic KubeVirt VirtualMachine name for a fleet ordinal:
+// GuestName is the name of the object that runs a fleet ordinal's simulated
+// DPU, whether it is a KubeVirt VirtualMachine or a Pod:
 // {fleet}-dpu-{ordinal:06d}.
-func VirtualMachineName(fleet string, ordinal int) string {
+func GuestName(fleet string, ordinal int) string {
 	return fmt.Sprintf("%s-dpu-%06d", fleet, ordinal)
+}
+
+// VirtualMachineName is the deterministic KubeVirt VirtualMachine name for a
+// fleet ordinal. It is the guest name, so existing VirtualMachines keep their
+// names.
+func VirtualMachineName(fleet string, ordinal int) string {
+	return GuestName(fleet, ordinal)
+}
+
+// GuestSecretName is the Secret a pod guest reads its files from:
+// {fleet}-dpu-{ordinal:06d}-guest.
+func GuestSecretName(fleet string, ordinal int) string {
+	return GuestName(fleet, ordinal) + "-guest"
 }
 
 // CloudInitSecretName is the cloud-init Secret for a fleet ordinal:

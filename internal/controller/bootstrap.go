@@ -22,6 +22,7 @@ import (
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/pod"
 )
 
 // bootstrapConditionError names a configuration the controller refuses, so
@@ -57,9 +58,32 @@ type bootstrapOutcome struct {
 // management credential at all: only a fleet that boots guests with the dpuagent
 // enabled gets one.
 func credentialsEligible(fleet *scalev1alpha1.SimFleet) bool {
-	return fleet.Spec.VirtualMachineTemplate != nil &&
-		kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate) == nil &&
-		dpuagent.Enabled(fleet)
+	switch {
+	case fleet.Spec.PodTemplate != nil:
+		return pod.ValidateTemplate(fleet.Spec.PodTemplate) == nil && dpuagent.Enabled(fleet)
+	case fleet.Spec.VirtualMachineTemplate != nil:
+		return kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate) == nil && dpuagent.Enabled(fleet)
+	}
+	return false
+}
+
+// fleetBootsGuests reports whether the fleet asks for a guest per ordinal,
+// as a VirtualMachine or as a Pod.
+func fleetBootsGuests(fleet *scalev1alpha1.SimFleet) bool {
+	return fleet.Spec.VirtualMachineTemplate != nil || fleet.Spec.PodTemplate != nil
+}
+
+// guestTemplateError is the error the fleet's guest template carries, or nil
+// when it can be rendered. A VirtualMachine template needs KubeVirt; a
+// fleet with a Pod template never does.
+func guestTemplateError(fleet *scalev1alpha1.SimFleet, kubeVirtInstalled bool) error {
+	switch {
+	case fleet.Spec.PodTemplate != nil:
+		return pod.ValidateTemplate(fleet.Spec.PodTemplate)
+	case fleet.Spec.VirtualMachineTemplate != nil && !kubeVirtInstalled:
+		return kubevirt.ErrNotInstalled
+	}
+	return kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate)
 }
 
 // conditionReason names the configuration a condition is blocked on, whether

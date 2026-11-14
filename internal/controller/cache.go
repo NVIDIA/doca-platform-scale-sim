@@ -29,9 +29,9 @@ import (
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 )
 
-// ManagerCacheOptions scopes the credential-bearing kinds to objects this
-// controller labels, so watching them does not cache every Secret,
-// ServiceAccount, Role, and RoleBinding in the cluster.
+// ManagerCacheOptions scopes the credential-bearing kinds and the guest Pods
+// to objects this controller labels, so watching them does not cache every
+// Secret, ServiceAccount, Role, RoleBinding, and Pod in the cluster.
 func ManagerCacheOptions() cache.Options {
 	fleetLabelled := cache.ByObject{Label: fleetLabelSelector()}
 	return cache.Options{ByObject: map[client.Object]cache.ByObject{
@@ -39,6 +39,7 @@ func ManagerCacheOptions() cache.Options {
 		&corev1.ServiceAccount{}: fleetLabelled,
 		&rbacv1.Role{}:           fleetLabelled,
 		&rbacv1.RoleBinding{}:    fleetLabelled,
+		&corev1.Pod{}:            fleetLabelled,
 	}}
 }
 

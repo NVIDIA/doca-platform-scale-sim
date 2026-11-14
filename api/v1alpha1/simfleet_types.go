@@ -165,6 +165,30 @@ type VirtualMachineTemplate struct {
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
+// PodTemplate shapes the Pod that backs each simulated DPU when the fleet
+// runs its DPUs as containers instead of KubeVirt VMs. The Pod is privileged.
+type PodTemplate struct {
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Image string `json:"image"`
+
+	// A missing cpu request defaults to 100m and a missing memory request to
+	// 800Mi in the controller. Do not kubebuilder-default those values: a
+	// default on this object would overwrite an explicit empty resources
+	// object. Other requests and all limits pass through unchanged.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// +optional
+	Metadata TemplateMetadata `json:"metadata,omitempty"`
+
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
 // DPUClusterReference names a DPF DPUCluster.
 type DPUClusterReference struct {
 	// +kubebuilder:validation:MinLength=1
@@ -325,6 +349,8 @@ type DPUAgentResponseDelayOverride struct {
 
 // SimFleetSpec defines the desired state of SimFleet
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.dpuAgent) ? !has(self.dpuAgent) : self.dpuAgent == oldSelf.dpuAgent",message="spec.dpuAgent is immutable"
+// +kubebuilder:validation:XValidation:rule="!(has(self.virtualMachineTemplate) && has(self.podTemplate))",message="virtualMachineTemplate and podTemplate are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.virtualMachineTemplate) || !has(self.podTemplate)) && (!has(oldSelf.podTemplate) || !has(self.virtualMachineTemplate))",message="a fleet cannot switch between virtualMachineTemplate and podTemplate"
 type SimFleetSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +required
@@ -356,6 +382,9 @@ type SimFleetSpec struct {
 
 	// +optional
 	VirtualMachineTemplate *VirtualMachineTemplate `json:"virtualMachineTemplate,omitempty"`
+
+	// +optional
+	PodTemplate *PodTemplate `json:"podTemplate,omitempty"`
 
 	// +optional
 	Bootstrap *BootstrapSpec `json:"bootstrap,omitempty"`

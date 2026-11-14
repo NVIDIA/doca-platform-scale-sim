@@ -146,6 +146,23 @@ func watchedVMI() *virtv1.VirtualMachineInstance {
 	}
 }
 
+func watchedPod() *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "scale-3000-dpu-000000",
+			Namespace:       "default",
+			OwnerReferences: []metav1.OwnerReference{fleetControllerReference()},
+			ResourceVersion: "1",
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodReady, Status: corev1.ConditionFalse, Reason: "ContainersNotReady",
+			}},
+		},
+	}
+}
+
 func fleetSecret() *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -358,6 +375,61 @@ var _ = Describe("Watch predicates", func() {
 			}}, true),
 			Entry("controller owner changed", watchUpdate[*virtv1.VirtualMachine]{mutate: func(vm *virtv1.VirtualMachine) {
 				vm.OwnerReferences[0].Name = "other-fleet"
+			}}, true),
+		)
+	})
+
+	Describe("Pod", func() {
+		It("enqueues Pod create and delete", func() {
+			pred := podWatchPredicate()
+			Expect(pred.Create(event.CreateEvent{Object: watchedPod()})).To(BeTrue(), "Pod create should enqueue")
+			Expect(pred.Delete(event.DeleteEvent{Object: watchedPod()})).To(BeTrue(), "Pod delete should enqueue")
+		})
+
+		DescribeTable("filters updates",
+			func(test watchUpdate[*corev1.Pod], enqueue bool) {
+				oldObj, newObj := test.oldObj, test.newObj
+				if test.mutate != nil {
+					oldPod := watchedPod()
+					newPod := oldPod.DeepCopy()
+					newPod.ResourceVersion = "2"
+					test.mutate(newPod)
+					oldObj, newObj = oldPod, newPod
+				}
+				got := podWatchPredicate().Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj})
+				Expect(got).To(Equal(enqueue))
+			},
+			Entry("nil old object", watchUpdate[*corev1.Pod]{newObj: watchedPod()}, false),
+			Entry("nil new object", watchUpdate[*corev1.Pod]{oldObj: watchedPod()}, false),
+			Entry("wrong old object type",
+				watchUpdate[*corev1.Pod]{oldObj: &provisioningv1.DPU{}, newObj: &provisioningv1.DPU{}}, false),
+			Entry("wrong new object type",
+				watchUpdate[*corev1.Pod]{oldObj: watchedPod(), newObj: &provisioningv1.DPU{}}, false),
+			Entry("annotation only", watchUpdate[*corev1.Pod]{mutate: func(pod *corev1.Pod) {
+				pod.Annotations = map[string]string{"example.com/noise": "value"}
+			}}, false),
+			Entry("container statuses only", watchUpdate[*corev1.Pod]{mutate: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "dpu", RestartCount: 1}}
+			}}, false),
+			Entry("another condition only", watchUpdate[*corev1.Pod]{mutate: func(pod *corev1.Pod) {
+				pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
+					Type: corev1.PodScheduled, Status: corev1.ConditionTrue,
+				})
+			}}, false),
+			Entry("phase changed", watchUpdate[*corev1.Pod]{mutate: func(pod *corev1.Pod) {
+				pod.Status.Phase = corev1.PodRunning
+			}}, true),
+			Entry("ready changed", watchUpdate[*corev1.Pod]{mutate: func(pod *corev1.Pod) {
+				pod.Status.Conditions[0].Status = corev1.ConditionTrue
+			}}, true),
+			Entry("pod IPs changed", watchUpdate[*corev1.Pod]{mutate: func(pod *corev1.Pod) {
+				pod.Status.PodIPs = []corev1.PodIP{{IP: "10.244.0.17"}}
+			}}, true),
+			Entry("deletion timestamp changed", watchUpdate[*corev1.Pod]{mutate: func(pod *corev1.Pod) {
+				pod.DeletionTimestamp = ptr.To(metav1.Now())
+			}}, true),
+			Entry("controller owner changed", watchUpdate[*corev1.Pod]{mutate: func(pod *corev1.Pod) {
+				pod.OwnerReferences[0].Name = "other-fleet"
 			}}, true),
 		)
 	})

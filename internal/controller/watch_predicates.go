@@ -29,6 +29,7 @@ import (
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/pod"
 )
 
 func inventoryChildPredicate() predicate.Predicate {
@@ -45,6 +46,13 @@ func dpuWatchPredicate() predicate.Predicate {
 // ownership/lifecycle changes that can affect SimFleet status or management.
 func virtualMachineWatchPredicate() predicate.Predicate {
 	return onUpdate(virtualMachineWatchChanged)
+}
+
+// podWatchPredicate limits owned-Pod reconciles to the state the instance
+// reads: phase, the Ready condition and the pod IPs, plus ownership and
+// lifecycle changes.
+func podWatchPredicate() predicate.Predicate {
+	return onUpdate(podWatchChanged)
 }
 
 // vmiWatchPredicate ignores high-volume VMI status noise while preserving
@@ -212,6 +220,24 @@ func vmiWatchChanged(oldObj, newObj client.Object) bool {
 	oldReady, oldFound := vmiReadyStatus(oldVMI)
 	newReady, newFound := vmiReadyStatus(newVMI)
 	return oldFound != newFound || oldReady != newReady
+}
+
+func podWatchChanged(oldObj, newObj client.Object) bool {
+	oldPod, ok := oldObj.(*corev1.Pod)
+	if !ok {
+		return false
+	}
+	newPod, ok := newObj.(*corev1.Pod)
+	if !ok {
+		return false
+	}
+	// The Pod's address becomes the device's spec.bmcIP. It appears on a
+	// status update of its own, before Ready, so it passes on its own.
+	return oldPod.Status.Phase != newPod.Status.Phase ||
+		pod.Ready(oldPod) != pod.Ready(newPod) ||
+		!equality.Semantic.DeepEqual(oldPod.Status.PodIPs, newPod.Status.PodIPs) ||
+		deletionTimestampChanged(oldPod, newPod) ||
+		controllerRefChanged(oldPod, newPod)
 }
 
 func vmiReadyStatus(vmi *virtv1.VirtualMachineInstance) (corev1.ConditionStatus, bool) {

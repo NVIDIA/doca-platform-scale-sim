@@ -96,34 +96,23 @@ func cloudInitUserdata(
 		return "", errors.New("SimFleet is required to render cloud-init userdata")
 	}
 
-	identityContent := dpuIdentityContent(fleet, ordinal)
-	identityIndicator, indentedIdentity := yamlLiteral(identityContent, "      ")
-	writeFiles := fmt.Sprintf(`  - path: %s
+	files, err := GuestFiles(fleet, ordinal, managementKubeconfig)
+	if err != nil {
+		return "", err
+	}
+	var writeFiles strings.Builder
+	for _, file := range files {
+		indicator, indented := yamlLiteral(file.Content, "      ")
+		fmt.Fprintf(&writeFiles, `  - path: %s
     permissions: "0600"
     content: %s
-%s`, dpuIdentityPath, identityIndicator, indentedIdentity)
+%s`, file.Path, indicator, indented)
+	}
 	// An enabled guest needs no runcmd at all: both units are baked in and
 	// enabled in the image, and everything they read arrives in write_files.
 	var runcmd []string
 
-	if dpuagent.Enabled(fleet) {
-		if len(managementKubeconfig) == 0 {
-			return "", fmt.Errorf("management kubeconfig for ordinal %d is empty", ordinal)
-		}
-		conf, err := dpuagent.RenderConfig(fleet, naming.SerialNumber(fleet.Name, ordinal))
-		if err != nil {
-			return "", fmt.Errorf("render dpuagent configuration for ordinal %d: %w", ordinal, err)
-		}
-		confIndicator, indentedConf := yamlLiteral(conf, "      ")
-		kubeconfigIndicator, indentedKubeconfig := yamlLiteral(string(managementKubeconfig), "      ")
-		writeFiles += fmt.Sprintf(`  - path: %s
-    permissions: "0600"
-    content: %s
-%s  - path: %s
-    permissions: "0600"
-    content: %s
-%s`, dpuagent.ConfPath, confIndicator, indentedConf, dpuagent.KubeconfigPath, kubeconfigIndicator, indentedKubeconfig)
-	} else {
+	if !dpuagent.Enabled(fleet) {
 		// Without a configuration and a credential neither baked unit has work
 		// to do, and the join helper would fail in a loop, so mask both.
 		//
@@ -165,7 +154,7 @@ users:
 write_files:
 %s%s`, naming.VirtualMachineName(fleet.Name, ordinal),
 		cloudInitDebugUser, cloudInitDebugPassword, cloudInitDebugUser,
-		writeFiles, runcmdSection), nil
+		writeFiles.String(), runcmdSection), nil
 }
 
 // dpuIdentityContent states which DPU this guest is going to become. Every
