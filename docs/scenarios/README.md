@@ -31,6 +31,78 @@ served over HTTP.
 
 
 
+## Pod runtime requirements
+
+A fleet with `spec.podTemplate` runs each simulated DPU as a privileged Pod
+instead of a KubeVirt VM, and needs no KubeVirt. That puts a second Kubernetes
+cluster, the DPU cluster, inside Pods of the host cluster, so the host cluster
+and its nodes have to meet the requirements below. `make test-e2e-pod` runs the
+pod runtime on Kind with these settings.
+
+### Non-overlapping CIDRs
+
+The DPU cluster's pod and service CIDRs must not overlap the host cluster's.
+The DPU cluster's flannel and kube-proxy run inside the DPU Pod and program
+routes and iptables rules for their own CIDRs, so an overlap makes them capture
+the host cluster's traffic for those addresses.
+
+DPF's kamaji service CIDR is `10.96.0.0/16` and the default flannel pod CIDR is
+`10.244.0.0/14`. Kind's default service CIDR is the first and its default pod
+CIDR falls inside the second, which is why the pod-runtime e2e moves the host side to pod CIDR `10.200.0.0/16` and service CIDR
+`10.112.0.0/16`:
+
+```bash
+KIND_POD_SUBNET=10.200.0.0/16 KIND_SERVICE_SUBNET=10.112.0.0/16 \
+  ./hack/e2e/setup-kind.sh
+```
+
+On a cluster you built yourself, choose the host CIDRs, or the DPU cluster's,
+so that no pair overlaps. The controller does not check this.
+
+### Node preparation
+
+Prepare every node a DPU Pod can land on, either with the DaemonSet below or by
+hand. A simulation node needs:
+
+- cgroup v2. It cannot be changed at runtime: boot the host with the unified
+  cgroup hierarchy.
+- The kernel modules `overlay`, `br_netfilter`, `vxlan` and `nf_conntrack`.
+- The sysctls `config/node-prep/` sets: `fs.inotify.max_user_instances` of at
+  least 8192, `fs.inotify.max_user_watches` of at least 1048576,
+  `kernel.pid_max` of at least 45 PIDs per DPU slot, and
+  `net.netfilter.nf_conntrack_max` of `max(32768 × CPUs, 131072)` with an
+  `nf_conntrack` hash size of at least a quarter of that.
+
+`nf_conntrack_max` is not writable from the DPU Pod, and the DaemonSet can only
+write it when its `hostNetwork` is the host's initial network namespace. On
+Kind it is the Kind node container's, so set the value from the Docker host
+before the DaemonSet runs, for example with `docker run --privileged --net=host`.
+`hack/e2e/prepare-sim-nodes.sh` does that. The DaemonSet leaves the sysctl alone
+when it already holds the target.
+
+`config/node-prep/` is a kustomize DaemonSet. It runs
+`/usr/lib/dpf-sim/node-prep.sh` from the `simfleet-node-container` image, so
+point its image at one the cluster can pull, then label each simulation node:
+
+```bash
+kubectl label node "${NODE}" scale.dpu.nvidia.com/sim-node=true
+kubectl create namespace simfleet-node-prep
+kubectl label namespace simfleet-node-prep pod-security.kubernetes.io/enforce=privileged
+kubectl apply -n simfleet-node-prep -k config/node-prep
+kubectl -n simfleet-node-prep rollout status daemonset/simfleet-node-prep
+```
+
+The DaemonSet selects `scale.dpu.nvidia.com/sim-node=true`, and a Ready Pod
+means preparation succeeded. Put the same label in the fleet's
+`podTemplate.nodeSelector` so the DPU Pods land only on prepared nodes.
+
+The fleet's namespace must allow privileged Pods: the DPU Pods are privileged
+and mount `/lib/modules` from the host. Label it
+`pod-security.kubernetes.io/enforce=privileged`, or set the equivalent in
+whatever admission policy the cluster uses.
+
+
+
 ## Private guest image registries
 
 SimFleet puts the guest image straight into the VirtualMachine as a

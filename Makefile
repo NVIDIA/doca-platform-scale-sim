@@ -107,6 +107,13 @@ DPF_HELMFILES_REPO ?= https://github.com/NVIDIA/doca-platform.git
 DPF_HELMFILES_REF ?= e343a51b63ee8cddd29f71891455ff6f83e50d94
 DPF_HELMFILES_DIR ?= $(LOCALBIN)/dpf-helmfiles
 HELMFILE_FILE ?= $(DPF_HELMFILES_DIR)/deploy/helmfiles/prereqs.yaml
+# Kind's pod and service CIDRs. Empty keeps kind's defaults, which is what the
+# VM e2e runs with. `make test-e2e-pod` sets both: the nested DPU cluster's
+# kamaji service CIDR is 10.96.0.0/16 and its default flannel pod CIDR is
+# 10.244.0.0/14, and a host cluster that overlaps them has its traffic captured
+# by the inner flannel and kube-proxy.
+KIND_POD_SUBNET ?=
+KIND_SERVICE_SUBNET ?=
 
 .PHONY: check-e2e-host
 check-e2e-host: ## Verify test-e2e runs on Linux amd64
@@ -122,7 +129,8 @@ check-e2e-host: ## Verify test-e2e runs on Linux amd64
 .PHONY: setup-test-e2e
 setup-test-e2e: check-e2e-host kind ## Create a Kind cluster for e2e tests if it does not exist
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) KIND_KUBERNETES_VERSION=$(KIND_KUBERNETES_VERSION) \
-		KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) KUBECTL=$(KUBECTL) ./hack/e2e/setup-kind.sh
+		KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) KUBECTL=$(KUBECTL) \
+		KIND_POD_SUBNET=$(KIND_POD_SUBNET) KIND_SERVICE_SUBNET=$(KIND_SERVICE_SUBNET) ./hack/e2e/setup-kind.sh
 
 .PHONY: fetch-e2e-helmfiles
 fetch-e2e-helmfiles: ## Sparse-clone DPF helmfiles from NVIDIA/doca-platform
@@ -214,6 +222,52 @@ test-e2e-run: check-e2e-host setup-test-e2e deploy-e2e-dpf deploy-e2e-kubevirt d
 	$(MAKE) deploy IMG=$(E2E_IMG)
 	$(KUBECTL) wait --for=condition=Available deployment -l control-plane=controller-manager -n simfleet-controller-system --timeout=180s
 	PATH="$(LOCALBIN):$(PATH)" go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout $(E2E_TEST_TIMEOUT)
+	$(MAKE) cleanup-test-e2e
+
+# The pod-runtime e2e. It installs no KubeVirt: the fleet runs each simulated
+# DPU as a privileged Pod from the node-in-a-pod image, on a Kind node prepared
+# by config/node-prep/.
+POD_E2E_POD_SUBNET ?= 10.200.0.0/16
+POD_E2E_SERVICE_SUBNET ?= 10.112.0.0/16
+# Not overridable: testdata/pod/simfleet.yaml and config/node-prep/ name this
+# image. It is loaded into Kind and never published.
+override E2E_NODE_CONTAINER_IMG := simfleet-node-container:local
+# The pod path has no guest boot, so this is DPF provisioning, the DPU Pod's
+# inner kubelet join, and the DPUService chart and image pulls. The spec's own
+# waits sum to about 63m, so the process timeout sits above that with room for
+# the AfterEach diagnostics.
+E2E_POD_TEST_TIMEOUT ?= 90m
+
+.PHONY: test-e2e-pod
+test-e2e-pod: check-e2e-host kind ## Run the pod-runtime e2e tests on Kind with DPF and no KubeVirt.
+	# Recursive makes ensure cleanup finishes before setup, even under make -j.
+	$(MAKE) cleanup-test-e2e
+	$(MAKE) test-e2e-pod-run
+
+# Target-specific, so every prerequisite, setup-test-e2e included, creates the
+# Kind cluster with the pod runtime's subnets.
+test-e2e-pod-run: KIND_POD_SUBNET = $(POD_E2E_POD_SUBNET)
+test-e2e-pod-run: KIND_SERVICE_SUBNET = $(POD_E2E_SERVICE_SUBNET)
+.PHONY: test-e2e-pod-run
+test-e2e-pod-run: check-e2e-host setup-test-e2e deploy-e2e-dpf deploy-e2e-bfb-fixtures manifests generate fmt vet
+	$(MAKE) dpuagent-build
+	$(MAKE) -C $(NODE_IMAGE_DIR) node-container-image-build NODE_CONTAINER_IMG=$(E2E_NODE_CONTAINER_IMG) \
+		DPUAGENT_BIN=$(E2E_DPUAGENT_BIN)
+	$(KIND) load docker-image $(E2E_NODE_CONTAINER_IMG) --name $(KIND_CLUSTER)
+	# Labels the node, presets conntrack on the Docker host, and applies
+	# config/node-prep/. Kind's hostNetwork is not the initial network
+	# namespace, so the DaemonSet cannot set nf_conntrack_max itself.
+	KUBECTL=$(KUBECTL) NODE_CONTAINER_IMG=$(E2E_NODE_CONTAINER_IMG) ./hack/e2e/prepare-sim-nodes.sh
+	# The fleet namespace holds the privileged DPU Pods. Pod Security admission
+	# only checks a pod when it is created, so it is labelled before the fleet.
+	$(KUBECTL) label --overwrite ns dpf-operator-system pod-security.kubernetes.io/enforce=privileged
+	$(MAKE) docker-build IMG=$(E2E_IMG)
+	$(KIND) load docker-image $(E2E_IMG) --name $(KIND_CLUSTER)
+	$(KUBECTL) create namespace simfleet-controller-system --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) label --overwrite ns simfleet-controller-system pod-security.kubernetes.io/enforce=restricted
+	$(MAKE) deploy IMG=$(E2E_IMG)
+	$(KUBECTL) wait --for=condition=Available deployment -l control-plane=controller-manager -n simfleet-controller-system --timeout=180s
+	E2E_RUNTIME=pod PATH="$(LOCALBIN):$(PATH)" go test -tags=e2e ./test/e2e/ -v -ginkgo.v -ginkgo.focus 'pod runtime' -timeout $(E2E_POD_TEST_TIMEOUT)
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
@@ -315,6 +369,8 @@ dpuagent-build-test: ## Run dpuagent build contract test.
 .PHONY: test-scripts
 test-scripts: dpuagent-build-test ## Run the shell contract tests for the hack, node image and scenario scripts.
 	bash "$(CURDIR)/hack/dpuagent/sync-bfb-fixture_test.sh"
+	bash "$(CURDIR)/hack/e2e/setup-kind_test.sh"
+	bash "$(CURDIR)/hack/e2e/prepare-sim-nodes_test.sh"
 	bash "$(CURDIR)/docs/scenarios/zero-trust-passthrough/test.sh"
 	$(MAKE) -C "$(CURDIR)/images/simfleet-node" test
 
