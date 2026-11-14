@@ -65,6 +65,10 @@ RUN sed -i 's/^WantedBy=cloud-init.target$/WantedBy=multi-user.target/' \
 COPY guest/kubeadm-join.args /usr/lib/dpf-sim/kubeadm-join.args
 COPY guest/kubeadm-patches/ /usr/lib/dpf-sim/kubeadm-patches/
 
+# The program of the node-prep DaemonSet's init container, which runs this
+# image to prepare the host kernel. The VM disk does not carry it.
+COPY --chmod=0755 guest/node-prep.sh /usr/lib/dpf-sim/node-prep.sh
+
 # The units a container must not run: loading modules would reach the host
 # kernel (that is host preparation), resolved would replace the Pod's cluster-DNS
 # resolv.conf, and the rest have no device, console or mount to manage.
