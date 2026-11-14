@@ -1,0 +1,16 @@
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+# Overrides the DPU cluster's kubelet configuration on this node only.
+#
+# The cluster-wide cgroupRoot is chosen for the cluster's real hosts and may
+# name a cgroup this guest never creates. The guest owns its whole cgroup
+# namespace, so its root is the right value.
+cgroupRoot: /
+# The inner kubelet sees the host's swap.
+failSwapOn: false
+# Every DPU's emptyDirs share the host disk, so a real threshold would make all
+# DPUs on a host evict at once.
+evictionHard:
+  nodefs.available: "0%"
+  nodefs.inodesFree: "0%"
+  imagefs.available: "0%"
