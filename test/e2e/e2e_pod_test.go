@@ -21,7 +21,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -191,16 +190,6 @@ var _ = Describe("SimFleet pod runtime", Ordered, Label("pod-runtime"), func() {
 			expectFleetCounts(g, podReplicas)
 		}).Should(Succeed())
 
-		By("stopping kube-proxy from writing nf_conntrack_max")
-		// The sysctl is read-only in the DPU Pod network namespace, and
-		// kube-proxy exits when the write fails. Zero leaves the kernel value.
-		Eventually(func(g Gomega) {
-			g.Expect(withTenantKubeconfig(relaxTenantKubeProxyConntrack)).To(Succeed())
-		}).Should(Succeed())
-		Eventually(func(g Gomega) {
-			g.Expect(withTenantKubeconfig(expectTenantKubeProxyReady)).To(Succeed())
-		}, 3*time.Minute, 5*time.Second).Should(Succeed())
-
 		By("deploying a DPUService")
 		Eventually(func(g Gomega) {
 			cmd := exec.Command("kubectl", "apply", "-f", "testdata/pod/dpuservice.yaml")
@@ -342,61 +331,4 @@ func dumpGuestJournal(units ...string) {
 		}
 		_, _ = fmt.Fprintf(GinkgoWriter, "Guest journal from %s:\n%s", name, redactGuestCredentials(output))
 	}
-}
-
-// relaxTenantKubeProxyConntrack sets conntrack maxPerCore and min to 0 and
-// restarts kube-proxy so the new pods read it. Kamaji writes null back into
-// the ConfigMap; a pod that already started keeps running.
-func relaxTenantKubeProxyConntrack(kubeconfigPath string) error {
-	get := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
-		"-n", "kube-system", "get", "cm", "kube-proxy", "-o", "json")
-	raw, err := run(get)
-	if err != nil {
-		return err
-	}
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(raw), &cm); err != nil {
-		return fmt.Errorf("decode kube-proxy ConfigMap: %w", err)
-	}
-	updated, err := disableKubeProxyConntrack(cm.Data["config.conf"])
-	if err != nil {
-		return err
-	}
-	patch, err := json.Marshal(map[string]any{
-		"data": map[string]string{"config.conf": updated},
-	})
-	if err != nil {
-		return err
-	}
-	apply := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
-		"-n", "kube-system", "patch", "cm", "kube-proxy", "--type=merge", "-p", string(patch))
-	if _, err := run(apply); err != nil {
-		return err
-	}
-	restart := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
-		"-n", "kube-system", "delete", "pod", "-l", "k8s-app=kube-proxy", "--wait=false")
-	_, err = run(restart)
-	return err
-}
-
-func expectTenantKubeProxyReady(kubeconfigPath string) error {
-	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
-		"-n", "kube-system", "get", "pods", "-l", "k8s-app=kube-proxy",
-		"-o", "jsonpath={.items[*].status.containerStatuses[0].ready}")
-	out, err := run(cmd)
-	if err != nil {
-		return err
-	}
-	ready := strings.Fields(out)
-	if len(ready) == 0 {
-		return fmt.Errorf("kube-proxy has no pods")
-	}
-	for _, item := range ready {
-		if item != "true" {
-			return fmt.Errorf("kube-proxy is not ready: %s", out)
-		}
-	}
-	return nil
 }
