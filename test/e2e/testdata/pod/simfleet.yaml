@@ -1,0 +1,41 @@
+apiVersion: scale.dpu.nvidia.com/v1alpha1
+kind: SimFleet
+metadata:
+  name: e2e-fleet
+  namespace: dpf-operator-system
+spec:
+  # One simulated DPU is enough to prove a DPUService pod runs on it.
+  replicas: 1
+  devicesPerDPUNode: 1
+  deviceSelectionLabels:
+    scale.dpu.nvidia.com/pool: e2e
+  bootstrap:
+    dpuClusterRef:
+      name: e2e-tenant
+      namespace: dpf-operator-system
+  dpuAgent:
+    # The same short phase delays as the VM suite; see testdata/simfleet.yaml.
+    phaseDelays:
+    - phase: OS Installing
+      minSeconds: 8
+      maxSeconds: 12
+    - phase: DPU Cluster Config
+      minSeconds: 2
+      maxSeconds: 2
+    - phase: Service Readiness
+      minSeconds: 2
+      maxSeconds: 2
+  # No virtualMachineTemplate: each simulated DPU is a privileged Pod, so the
+  # run needs no KubeVirt. The image is built by `make test-e2e-pod` and loaded
+  # into Kind, and the Pods land only on nodes config/node-prep/ prepared.
+  podTemplate:
+    image: simfleet-node-container:local
+    nodeSelector:
+      scale.dpu.nvidia.com/sim-node: "true"
+  dpuNodeTemplate:
+    spec:
+      nodeRebootMethod:
+        external: {}
+  dpuDeviceTemplate:
+    spec:
+      numberOfPFs: 1
