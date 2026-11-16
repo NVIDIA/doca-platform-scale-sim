@@ -80,6 +80,25 @@ before the DaemonSet runs, for example with `docker run --privileged --net=host`
 `hack/e2e/prepare-sim-nodes.sh` does that. The DaemonSet leaves the sysctl alone
 when it already holds the target.
 
+### kube-proxy
+
+The DPU cluster's kube-proxy runs inside the DPU Pod. `nf_conntrack_max` is
+read-only in that network namespace, including for a privileged container, so
+kube-proxy exits when its default configuration tries to raise the limit.
+
+Set both conntrack limits to zero in the kube-proxy configuration the DPU
+cluster installs, so kube-proxy leaves the kernel value alone:
+
+```yaml
+conntrack:
+  maxPerCore: 0
+  min: 0
+```
+
+DPF brings the DPU cluster up with Kamaji by default. The same limit applies
+when another provider, such as HyperShift, installs it. The provider has to
+put these two values in the kube-proxy configuration it installs.
+
 `config/node-prep/` is a kustomize DaemonSet. It runs
 `/usr/lib/dpf-sim/node-prep.sh` from the `simfleet-node-container` image, so
 point its image at one the cluster can pull, then label each simulation node:
