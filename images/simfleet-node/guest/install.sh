@@ -28,7 +28,7 @@ KUBE_MINOR="${KUBE_VERSION%.*}"
 # customize-disk.sh installs it under virt-customize, where a package script
 # must not start a service, and Dockerfile.container installs it in its own
 # apt transaction. Both use Ubuntu's containerd package.
-if ! command -v containerd >/dev/null 2>&1; then
+if ! command -v containerd > /dev/null 2>&1; then
 	echo "containerd must be installed before guest/install.sh" >&2
 	exit 1
 fi

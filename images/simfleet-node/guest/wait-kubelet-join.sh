@@ -155,7 +155,7 @@ ensure_kernel_config() {
 		return 0
 	fi
 	mkdir -p "$(dirname "${config}")"
-	cat > "${config}" <<'EOF'
+	cat > "${config}" << 'EOF'
 CONFIG_NAMESPACES=y
 CONFIG_NET_NS=y
 CONFIG_PID_NS=y
@@ -193,7 +193,7 @@ append_image_join_args() {
 }
 
 if [ "${WAIT_KUBELET_JOIN_SOURCE_ONLY:-}" = 1 ]; then
-	return 0 2>/dev/null || exit 0
+	return 0 2> /dev/null || exit 0
 fi
 
 if [ -s "${KUBELET_CONF}" ]; then
