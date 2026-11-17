@@ -1,0 +1,20 @@
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+# kubeadm join installs the DPU cluster's KubeletConfiguration, which is
+# written for the cluster's real hosts. kubeadm-join.args points join at this
+# directory, and the "+strategic" suffix makes kubeadm strategic-merge this
+# file onto that configuration for this node only. A simulated DPU is a
+# container, so the values below have to differ from the cluster's.
+#
+# The cluster-wide cgroupRoot is chosen for the cluster's real hosts and may
+# name a cgroup this guest never creates. The guest owns its whole cgroup
+# namespace, so its root is the right value.
+cgroupRoot: /
+# The inner kubelet sees the host's swap.
+failSwapOn: false
+# Every DPU's emptyDirs share the host disk, so a real threshold would make all
+# DPUs on a host evict at once.
+evictionHard:
+  nodefs.available: "0%"
+  nodefs.inodesFree: "0%"
+  imagefs.available: "0%"

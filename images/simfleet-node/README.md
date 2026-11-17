@@ -86,7 +86,7 @@ path.
 | Area | Contents |
 | --- | --- |
 | Kubernetes | `kubelet`, `kubeadm`, `kubectl` pinned to `1.36.4-1.1` and held; kubelet **disabled** until `kubeadm join` starts it |
-| Runtime | Ubuntu `containerd`, `/etc/containerd/config.toml` regenerated from `containerd config default` with CRI enabled and runc on `SystemdCgroup = true`; enabled at boot |
+| Runtime | Ubuntu `containerd`, installed by `customize-disk.sh` under a `policy-rc.d` that exits 101 so the package scripts do not start a service. `guest/install.sh` then regenerates `/etc/containerd/config.toml` from `containerd config default` with CRI enabled and runc on `SystemdCgroup = true`, and enables the unit. The pod image installs the same package from `Dockerfile.container` |
 | kubeadm prerequisites | `/etc/modules-load.d/simfleet.conf` (`overlay`, `br_netfilter`) and `/etc/sysctl.d/99-simfleet-k8s.conf` (bridge nf-call for IPv4/IPv6, `net.ipv4.ip_forward`) |
 | CNI | `kubernetes-cni` plugins in `/opt/cni/bin` and kube-flannel's default `/etc/cni/net.d/10-flannel.conflist` |
 | Mock DPU agent | `/opt/dpf/mock-dpuagent` built from the doca-platform commit pinned by `hack/dpuagent/mock.ref`, plus `/opt/dpf/wait-kubelet-join.sh`, and enabled `mock-dpuagent.service` and `wait-kubelet-join.service` |
@@ -168,6 +168,23 @@ The image contains standard CNI plugin binaries and kube-flannel's default
 allocation and may overwrite that conflist. The baked file keeps kubelet
 Ready when the Flannel DaemonSet copies `/opt/cni/bin/flannel` but skips
 installing the conflist.
+
+## Node container image
+
+`Dockerfile.container` builds the same guest as a privileged-Pod image,
+`simfleet-node-container`, with systemd as PID 1:
+
+```sh
+make dpuagent-build                  # once, from the repo root
+make node-container-image-build      # linux/amd64
+./verify-container.sh                # runs the image with docker run --privileged
+```
+
+The Kubernetes pin comes from `lib.sh`, the mock binary from `DPUAGENT_BIN`.
+`guest/container-entrypoint.sh` gives systemd its own cgroup namespace, and
+`guest/kubeadm-join.args` and `guest/kubeadm-patches/` (under
+`/usr/lib/dpf-sim/` in the image) adjust `kubeadm join` and the kubelet
+configuration for a container. None of these go into the VM disk.
 
 ## Tests
 

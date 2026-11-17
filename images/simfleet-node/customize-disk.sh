@@ -91,9 +91,67 @@ if [ "${grown_bytes}" -lt "${min_root_bytes}" ]; then
 fi
 echo "Root filesystem grew to ${grown_bytes} bytes"
 
+# The base image points /etc/resolv.conf at systemd-resolved's 127.0.0.53
+# stub, and resolved does not run under virt-customize, so every apt lookup
+# fails with "Temporary failure resolving". The libguestfs appliance configures
+# QEMU user networking as 169.254.2.0/16, whose resolver is 169.254.2.3. Use it
+# for the duration of the install and put the original back afterwards, so the
+# shipped guest keeps its own configuration rather than this build-time one.
+#
+# Each virt-customize --run-command is a separate process, so the resolver
+# workaround, the VM-only package and module-load steps, and the shared
+# install.sh run share one command and one EXIT trap.
+guest_install_cmd="$(
+	cat << 'EOF'
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+RESOLV_BACKUP=""
+RESOLV_WAS_LINK=""
+if [ -L /etc/resolv.conf ]; then
+	RESOLV_WAS_LINK="$(readlink /etc/resolv.conf)"
+elif [ -e /etc/resolv.conf ]; then
+	RESOLV_BACKUP=/etc/resolv.conf.simfleet-build
+	cp -a /etc/resolv.conf "${RESOLV_BACKUP}"
+fi
+restore_resolv() {
+	rm -f /etc/resolv.conf
+	if [ -n "${RESOLV_WAS_LINK}" ]; then
+		ln -s "${RESOLV_WAS_LINK}" /etc/resolv.conf
+	elif [ -n "${RESOLV_BACKUP}" ]; then
+		mv "${RESOLV_BACKUP}" /etc/resolv.conf
+	fi
+}
+trap restore_resolv EXIT
+rm -f /etc/resolv.conf
+printf 'nameserver 169.254.2.3\n' > /etc/resolv.conf
+
+apt-get update
+apt-get install -y --no-install-recommends \
+	qemu-guest-agent
+# qemu-guest-agent.service is intentionally static on Ubuntu. The udev rule
+# in the package starts it when the org.qemu.guest_agent.0 virtio port appears.
+
+# kubeadm preflight expects both modules loaded.
+cat > /etc/modules-load.d/simfleet.conf << 'MODULES_EOF'
+overlay
+br_netfilter
+MODULES_EOF
+chmod 0644 /etc/modules-load.d/simfleet.conf
+
+# Ubuntu's containerd package, same as the pod image. virt-customize has no
+# running systemd, so policy-rc.d keeps the package scripts from starting the
+# service. install.sh enables the unit afterwards and removes nothing else.
+printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+chmod 0755 /usr/sbin/policy-rc.d
+apt-get install -y --no-install-recommends containerd
+rm -f /usr/sbin/policy-rc.d
+EOF
+	printf "\nchmod +x /tmp/install.sh && KUBE_APT_VERSION='%s' /tmp/install.sh\n" "${KUBE_APT_VERSION}"
+)"
+
 virt-customize -a "${OUT_IMG}" \
 	--copy-in "${ROOT}/guest/install.sh:/tmp" \
-	--run-command "chmod +x /tmp/install.sh && KUBE_APT_VERSION='${KUBE_APT_VERSION}' /tmp/install.sh" \
+	--run-command "${guest_install_cmd}" \
 	--run-command 'rm -f /tmp/install.sh' \
 	--copy-in "${ROOT}/guest/10-flannel.conflist:/etc/cni/net.d" \
 	--run-command 'chmod 0644 /etc/cni/net.d/10-flannel.conflist'
