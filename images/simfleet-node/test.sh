@@ -1961,7 +1961,7 @@ np_setup() {
 	echo 32768 > "${NP_STUB}/sysctl/kernel.pid_max"
 	echo 65536 > "${NP_STUB}/sysctl/net.netfilter.nf_conntrack_max"
 
-	cat > "${NP_STUB}/bin/modprobe" <<'STUB'
+	cat > "${NP_STUB}/bin/modprobe" << 'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "${NP_STUB}/modprobe.log"
 if [ "${FAKE_MODPROBE_FAIL:-}" = "$1" ]; then
@@ -1976,7 +1976,7 @@ if [ "$1" = nf_conntrack ] && [ ! -d "${NP_STUB}/sys-module/nf_conntrack" ]; the
 fi
 exit 0
 STUB
-	cat > "${NP_STUB}/bin/sysctl" <<'STUB'
+	cat > "${NP_STUB}/bin/sysctl" << 'STUB'
 #!/usr/bin/env bash
 case "$1" in
 -n)
@@ -2005,7 +2005,7 @@ case "$1" in
 	;;
 esac
 STUB
-	cat > "${NP_STUB}/bin/nproc" <<'STUB'
+	cat > "${NP_STUB}/bin/nproc" << 'STUB'
 #!/usr/bin/env bash
 echo "${FAKE_NPROC:-4}"
 STUB
@@ -2247,7 +2247,10 @@ test_node_prep_manifests() {
 	# kubectl can render the kustomization offline.
 	if command -v kubectl > /dev/null 2>&1; then
 		kubectl kustomize "${dir}" > "${TMP}/node-prep-kustomize.out" 2>&1 \
-			|| { cat "${TMP}/node-prep-kustomize.out" >&2; fail "kubectl kustomize config/node-prep failed"; }
+			|| {
+				cat "${TMP}/node-prep-kustomize.out" >&2
+				fail "kubectl kustomize config/node-prep failed"
+			}
 		assert_contains 'name: simfleet-node-prep' "${TMP}/node-prep-kustomize.out"
 	fi
 }
