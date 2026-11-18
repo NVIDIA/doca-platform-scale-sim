@@ -120,6 +120,8 @@ test_container_image_contract() {
 	assert_contains 'guest/mock-dpuagent.service guest/wait-kubelet-join.service /usr/lib/systemd/system/' "${dockerfile}"
 	assert_contains '/opt/dpf/mock-dpuagent' "${dockerfile}"
 	assert_contains 'guest/wait-kubelet-join.sh /opt/dpf/wait-kubelet-join.sh' "${dockerfile}"
+	assert_contains 'guest/kubelet-node-name.sh /opt/dpf/kubelet-node-name.sh' "${dockerfile}"
+	assert_contains 'guest/kubelet.service.d/20-dpf-node-name.conf /usr/lib/systemd/system/kubelet.service.d/20-dpf-node-name.conf' "${dockerfile}"
 	assert_contains 'systemctl enable mock-dpuagent.service wait-kubelet-join.service' "${dockerfile}"
 	# A container has no cloud-init.target, so both units move to multi-user.target.
 	assert_contains "sed -i 's/^WantedBy=cloud-init.target\$/WantedBy=multi-user.target/'" "${dockerfile}"
@@ -205,12 +207,14 @@ test_recipe_contract() {
 		source-hash.sh Dockerfile Dockerfile.builder customize-disk.sh \
 		verify-guest.sh README.md \
 		guest/install.sh guest/mock-dpuagent.service guest/wait-kubelet-join.sh \
+		guest/kubelet-node-name.sh \
+		guest/kubelet.service.d/20-dpf-node-name.conf \
 		guest/wait-kubelet-join.service guest/10-flannel.conflist; do
 		test -f "${ROOT}/${file}" || fail "missing ${file}"
 	done
 	for file in build.sh build-cached.sh check-host.sh customize-disk.sh \
 		source-hash.sh verify-guest.sh guest/install.sh test.sh \
-		guest/wait-kubelet-join.sh; do
+		guest/wait-kubelet-join.sh guest/kubelet-node-name.sh; do
 		test -x "${ROOT}/${file}" || fail "${file} is not executable"
 	done
 
@@ -328,6 +332,8 @@ test_recipe_contract() {
 	# a fleet with dpuAgent.enabled:false stops these two, so the placement is a
 	# contract, not a preference.
 	for path in /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh \
+		/opt/dpf/kubelet-node-name.sh \
+		/usr/lib/systemd/system/kubelet.service.d/20-dpf-node-name.conf \
 		/usr/lib/systemd/system/mock-dpuagent.service \
 		/usr/lib/systemd/system/wait-kubelet-join.service; do
 		assert_matches $'^\t'"${path}\$" "${ROOT}/verify-guest.sh"
@@ -374,6 +380,11 @@ test_recipe_contract() {
 	assert_absent 'bash -c' "${ROOT}/guest/wait-kubelet-join.sh"
 	assert_contains 'validate_join_command' "${ROOT}/guest/wait-kubelet-join.sh"
 	assert_contains '--node-name=' "${ROOT}/guest/wait-kubelet-join.sh"
+	assert_contains 'clear_partial_join' "${ROOT}/guest/wait-kubelet-join.sh"
+	assert_contains 'ExecStartPre=/opt/dpf/kubelet-node-name.sh' \
+		"${ROOT}/guest/kubelet.service.d/20-dpf-node-name.conf"
+	assert_contains 'KUBELET_EXTRA_ARGS=--hostname-override=' \
+		"${ROOT}/guest/kubelet-node-name.sh"
 	# The controller stopped reading the join Secret, so provenance has to be
 	# re-established here against the DPU's own UID. Owner reference values are
 	# never compared as text: the API server compares the real field values and
@@ -794,13 +805,15 @@ test_build_orchestration() {
 	assert_contains "--copy-in ${WORK}/mock-dpuagent:/opt/dpf" "${CALLS}"
 	assert_contains "--copy-in ${ROOT}/guest/10-flannel.conflist:/etc/cni/net.d" "${CALLS}"
 	assert_contains "--copy-in ${ROOT}/guest/wait-kubelet-join.sh:/opt/dpf" "${CALLS}"
+	assert_contains "--copy-in ${ROOT}/guest/kubelet-node-name.sh:/opt/dpf" "${CALLS}"
+	assert_contains "--copy-in ${ROOT}/guest/kubelet.service.d/20-dpf-node-name.conf:/usr/lib/systemd/system/kubelet.service.d" "${CALLS}"
 	# Vendor path, so a disabled fleet can mask them from /etc. See
 	# customize-disk.sh for why /etc is the one place these must not go.
 	assert_contains "--copy-in ${ROOT}/guest/mock-dpuagent.service:/usr/lib/systemd/system" "${CALLS}"
 	assert_contains "--copy-in ${ROOT}/guest/wait-kubelet-join.service:/usr/lib/systemd/system" "${CALLS}"
 	assert_contains '--run-command systemctl enable mock-dpuagent.service' "${CALLS}"
 	assert_contains '--run-command systemctl enable wait-kubelet-join.service' "${CALLS}"
-	assert_contains 'chmod 0755 /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh' "${CALLS}"
+	assert_contains 'chmod 0755 /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh /opt/dpf/kubelet-node-name.sh' "${CALLS}"
 	assert_contains 'virt-sysprep -a' "${CALLS}"
 	assert_absent 'virt-resize' "${CALLS}"
 	assert_absent 'growpart' "${CALLS}"
@@ -1659,13 +1672,66 @@ test_join_helper_reads_its_gate_with_the_dpu_uid() {
 	done
 }
 
+test_kubelet_node_name_writes_the_dpu_name() (
+	local dir="${TMP}/kubelet-node-name"
+	rm -rf "${dir}"
+	mkdir -p "${dir}/etc"
+	printf 'DPU_NAME=%s\nDPU_NAMESPACE=dpf-operator-system\n' "${JOIN_DPU_NAME}" \
+		> "${dir}/etc/identity.env"
+
+	IDENTITY_FILE="${dir}/etc/identity.env" \
+		KUBELET_DEFAULT="${dir}/etc/default/kubelet" \
+		"${ROOT}/guest/kubelet-node-name.sh" \
+		|| fail "kubelet-node-name rejected a valid identity"
+	grep -qx "KUBELET_EXTRA_ARGS=--hostname-override=${JOIN_DPU_NAME}" \
+		"${dir}/etc/default/kubelet" \
+		|| fail "kubelet-node-name did not write the DPU hostname override"
+
+	printf 'DPU_NAME=not a name\n' > "${dir}/etc/identity.env"
+	if IDENTITY_FILE="${dir}/etc/identity.env" \
+		KUBELET_DEFAULT="${dir}/etc/default/kubelet" \
+		"${ROOT}/guest/kubelet-node-name.sh"; then
+		fail "kubelet-node-name accepted a DPU name kubelet cannot register"
+	fi
+	echo "PASS: kubelet node name"
+)
+
+test_join_helper_clears_a_partial_join() {
+	local root
+	root="$(join_helper_env partial)"
+	: > "${root}/calls"
+	mkdir -p "${root}/pki" "${root}/kubelet-pki"
+	printf 'stale-ca\n' > "${root}/pki/ca.crt"
+	printf 'wrong-cert\n' > "${root}/kubelet-pki/kubelet-client-current.pem"
+	printf 'dated-cert\n' > "${root}/kubelet-pki/kubelet-client-2026.pem"
+
+	run_join_helper "${root}" "FAKE_JOIN_COMMAND=${VALID_JOIN_COMMAND}" \
+		"KUBE_CA_CERT=${root}/pki/ca.crt" \
+		"KUBELET_PKI_DIR=${root}/kubelet-pki" \
+		|| {
+			cat "${root}/out" >&2
+			fail "the join helper failed after a partial join"
+		}
+
+	[ ! -e "${root}/pki/ca.crt" ] \
+		|| fail "a leftover CA survived the retried join"
+	[ ! -e "${root}/kubelet-pki/kubelet-client-current.pem" ] \
+		|| fail "a client certificate survived the retried join"
+	[ ! -e "${root}/kubelet-pki/kubelet-client-2026.pem" ] \
+		|| fail "a dated client certificate survived the retried join"
+	assert_contains 'kubeadm-arg join' "${root}/calls"
+}
+
 test_join_helper_is_idempotent_once_kubelet_is_configured() {
 	local root
 	root="$(join_helper_env already-joined)"
 	: > "${root}/calls"
 	printf 'apiVersion: v1\nkind: Config\n' > "${root}/etc/kubelet.conf"
+	mkdir -p "${root}/pki"
+	printf 'kept-ca\n' > "${root}/pki/ca.crt"
 
 	run_join_helper "${root}" "FAKE_JOIN_COMMAND=${VALID_JOIN_COMMAND}" \
+		"KUBE_CA_CERT=${root}/pki/ca.crt" \
 		|| {
 			cat "${root}/out" >&2
 			fail "the join helper failed on an already joined guest"
@@ -1673,6 +1739,8 @@ test_join_helper_is_idempotent_once_kubelet_is_configured() {
 
 	test ! -s "${root}/calls" \
 		|| fail "the join helper rejoined a guest that already has kubelet.conf"
+	grep -qx 'kept-ca' "${root}/pki/ca.crt" \
+		|| fail "a finished join had its CA removed"
 }
 
 test_join_helper_retries_until_the_secret_exists() {
@@ -1782,6 +1850,8 @@ test_verifier_rejects_missing_guest_file() {
 		/usr/lib/systemd/system/qemu-guest-agent.service \
 		/usr/lib/udev/rules.d/60-qemu-guest-agent.rules \
 		/opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh \
+		/opt/dpf/kubelet-node-name.sh \
+		/usr/lib/systemd/system/kubelet.service.d/20-dpf-node-name.conf \
 		/usr/lib/systemd/system/mock-dpuagent.service \
 		/usr/lib/systemd/system/wait-kubelet-join.service; do
 		if run_verifier "${TMP}/verify-missing.out" "FAKE_MISSING_FILE=${file}"; then
@@ -2288,6 +2358,8 @@ test_cached_build_rebuilds_on_image_version_change
 test_cached_build_never_trusts_a_bare_tag
 test_join_args_hook
 test_kernel_config_for_kubeadm
+test_kubelet_node_name_writes_the_dpu_name
+test_join_helper_clears_a_partial_join
 test_join_helper_configures_kubelet_from_the_secret
 test_join_helper_is_idempotent_once_kubelet_is_configured
 test_join_helper_waits_for_configure_kubelet

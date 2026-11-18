@@ -174,10 +174,12 @@ virt-customize -a "${OUT_IMG}" \
 	--mkdir "${SIMFLEET_DPUAGENT_GUEST_DIR}" \
 	--copy-in "${DPUAGENT_BIN}:${SIMFLEET_DPUAGENT_GUEST_DIR}" \
 	--copy-in "${ROOT}/guest/wait-kubelet-join.sh:${SIMFLEET_DPUAGENT_GUEST_DIR}" \
+	--copy-in "${ROOT}/guest/kubelet-node-name.sh:${SIMFLEET_DPUAGENT_GUEST_DIR}" \
 	--copy-in "${ROOT}/guest/mock-dpuagent.service:/usr/lib/systemd/system" \
 	--copy-in "${ROOT}/guest/wait-kubelet-join.service:/usr/lib/systemd/system" \
-	--run-command "chmod 0755 ${SIMFLEET_DPUAGENT_GUEST_DIR}/mock-dpuagent ${SIMFLEET_DPUAGENT_GUEST_DIR}/wait-kubelet-join.sh" \
-	--run-command "chmod 0644 /usr/lib/systemd/system/mock-dpuagent.service /usr/lib/systemd/system/wait-kubelet-join.service" \
+	--copy-in "${ROOT}/guest/kubelet.service.d/20-dpf-node-name.conf:/usr/lib/systemd/system/kubelet.service.d" \
+	--run-command "chmod 0755 ${SIMFLEET_DPUAGENT_GUEST_DIR}/mock-dpuagent ${SIMFLEET_DPUAGENT_GUEST_DIR}/wait-kubelet-join.sh ${SIMFLEET_DPUAGENT_GUEST_DIR}/kubelet-node-name.sh" \
+	--run-command "chmod 0644 /usr/lib/systemd/system/mock-dpuagent.service /usr/lib/systemd/system/wait-kubelet-join.service /usr/lib/systemd/system/kubelet.service.d/20-dpf-node-name.conf" \
 	--run-command 'systemctl daemon-reload' \
 	--run-command 'systemctl enable mock-dpuagent.service' \
 	--run-command 'systemctl enable wait-kubelet-join.service'

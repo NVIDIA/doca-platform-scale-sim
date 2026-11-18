@@ -117,13 +117,16 @@ for unit in mock-dpuagent.service wait-kubelet-join.service; do
 		|| fail "${unit} is not wanted by multi-user.target"
 done
 for file in /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh \
+	/opt/dpf/kubelet-node-name.sh \
+	/usr/lib/systemd/system/kubelet.service.d/20-dpf-node-name.conf \
 	/etc/cni/net.d/10-flannel.conflist \
 	/usr/lib/dpf-sim/kubeadm-join.args \
 	"/usr/lib/dpf-sim/kubeadm-patches/kubeletconfiguration+strategic.yaml" \
 	/usr/local/bin/container-entrypoint.sh; do
 	in_container test -f "${file}" || fail "${file} is missing"
 done
-for file in /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh; do
+for file in /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh \
+	/opt/dpf/kubelet-node-name.sh; do
 	in_container test -x "${file}" || fail "${file} is not executable"
 done
 

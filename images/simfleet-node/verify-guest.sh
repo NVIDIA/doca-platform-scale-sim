@@ -57,6 +57,8 @@ expected_files=(
 	/usr/lib/udev/rules.d/60-qemu-guest-agent.rules
 	/opt/dpf/mock-dpuagent
 	/opt/dpf/wait-kubelet-join.sh
+	/opt/dpf/kubelet-node-name.sh
+	/usr/lib/systemd/system/kubelet.service.d/20-dpf-node-name.conf
 	# Vendor units, so that a fleet with dpuAgent.enabled:false can mask them.
 	# systemd reads /etc before /run before /usr/lib, so a unit file in /etc
 	# would leave `systemctl mask` nowhere to put its /dev/null symlink.
