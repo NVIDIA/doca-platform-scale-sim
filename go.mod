@@ -7,7 +7,7 @@ require (
 	github.com/nvidia/doca-platform v0.1.0-latest-stable.0.20261029020030-39ada4c8de47
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	golang.org/x/mod v0.42.0
 	k8s.io/api v0.36.5
 	k8s.io/apiextensions-apiserver v0.36.5
