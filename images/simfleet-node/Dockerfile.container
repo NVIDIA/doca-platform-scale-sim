@@ -48,7 +48,9 @@ RUN KUBE_APT_VERSION="${KUBE_APT_VERSION}" /tmp/install.sh \
 # The same files, at the same paths, as customize-disk.sh puts in the VM disk.
 COPY --from=dpuagent --chmod=0755 ${DPUAGENT_FILE} /opt/dpf/mock-dpuagent
 COPY --chmod=0755 guest/wait-kubelet-join.sh /opt/dpf/wait-kubelet-join.sh
+COPY --chmod=0755 guest/kubelet-node-name.sh /opt/dpf/kubelet-node-name.sh
 COPY --chmod=0644 guest/mock-dpuagent.service guest/wait-kubelet-join.service /usr/lib/systemd/system/
+COPY --chmod=0644 guest/kubelet.service.d/20-dpf-node-name.conf /usr/lib/systemd/system/kubelet.service.d/20-dpf-node-name.conf
 COPY --chmod=0644 guest/10-flannel.conflist /etc/cni/net.d/10-flannel.conflist
 
 # The VM image starts both units from cloud-init.target. A container has no

@@ -39,8 +39,10 @@ set -euo pipefail
 #
 #   - this script exits 0 immediately once kubelet.conf is in place;
 #   - the mock's Start Kubelet step can run before the next poll sees
-#     KubeletConfigured; the kubelet it starts without configuration
-#     crash-loops until kubeadm writes that configuration and restarts it;
+#     KubeletConfigured. kubelet-node-name.sh has already set
+#     --hostname-override to the DPU name, so that start bootstraps the
+#     DPU name rather than the container hostname, and the kubelet
+#     crash-loops until kubeadm writes its configuration and restarts it;
 #   - the mock's Start Kubelet step is a no-op on an already running unit.
 #
 # The mock's simulated reboots do not restart the VM, so after the first join
@@ -139,6 +141,8 @@ validate_join_command() {
 }
 
 JOIN_ARGS_FILE="${JOIN_ARGS_FILE:-/usr/lib/dpf-sim/kubeadm-join.args}"
+KUBE_CA_CERT="${KUBE_CA_CERT:-/etc/kubernetes/pki/ca.crt}"
+KUBELET_PKI_DIR="${KUBELET_PKI_DIR:-/var/lib/kubelet/pki}"
 
 # ensure_kernel_config gives kubeadm a config file to parse. The guest shares
 # the host kernel. SystemVerification refuses the join when it finds neither
@@ -178,6 +182,21 @@ CONFIG_CFS_BANDWIDTH=y
 CONFIG_SECCOMP=y
 CONFIG_SECCOMP_FILTER=y
 EOF
+}
+
+# clear_partial_join drops what a failed kubeadm join leaves behind. This runs
+# only while kubelet.conf is absent, so a finished join is never touched. The
+# leftover CA fails every later preflight, and a client certificate issued for
+# the container hostname can never register the DPU name.
+clear_partial_join() {
+	local cert
+	rm -f "${KUBE_CA_CERT}"
+	[ -d "${KUBELET_PKI_DIR}" ] || return 0
+	for cert in "${KUBELET_PKI_DIR}"/kubelet-client-*.pem \
+		"${KUBELET_PKI_DIR}/kubelet-client-current.pem"; do
+		[ -e "${cert}" ] || [ -L "${cert}" ] || continue
+		rm -f "${cert}"
+	done
 }
 
 # append_image_join_args adds the container image's extra kubeadm arguments.
@@ -353,6 +372,7 @@ fi
 # this node under the guest hostname, while DPF and the e2e contract both
 # expect the tenant Node to be named after the DPU.
 log "joining the tenant cluster as ${dpu_name}"
+clear_partial_join
 append_image_join_args
 ensure_kernel_config
 "${join_argv[@]}" --node-name="${dpu_name}"
