@@ -312,7 +312,7 @@ func newFleetHarness(fleet *scalev1alpha1.SimFleet, objects ...client.Object) *f
 		}).
 		WithObjects(append([]client.Object{fleet}, objects...)...).
 		Build()
-	h.reconciler = &SimFleetReconciler{Client: h.client, Scheme: scheme}
+	h.reconciler = &SimFleetReconciler{Client: h.client, Scheme: scheme, KubeVirtInstalled: true}
 	return h
 }
 

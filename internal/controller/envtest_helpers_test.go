@@ -67,6 +67,13 @@ func startFleetManager() func() {
 // waits for it to exit.
 func startManager(withFleet bool) func() {
 	GinkgoHelper()
+	return startManagerWithKubeVirt(withFleet, true)
+}
+
+// startManagerWithKubeVirt is startManager for a cluster that does or does not
+// serve KubeVirt's API.
+func startManagerWithKubeVirt(withFleet, kubeVirtInstalled bool) func() {
+	GinkgoHelper()
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme.Scheme,
 		Cache:                  ManagerCacheOptions(),
@@ -79,8 +86,9 @@ func startManager(withFleet bool) func() {
 	issuer := &countingServiceAccountIssuer{}
 	if withFleet {
 		Expect((&SimFleetReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
+			Client:            mgr.GetClient(),
+			Scheme:            mgr.GetScheme(),
+			KubeVirtInstalled: kubeVirtInstalled,
 		}).SetupWithManager(mgr)).To(Succeed())
 	}
 	Expect((&SimInstanceReconciler{
@@ -89,6 +97,7 @@ func startManager(withFleet bool) func() {
 		Scheme:                    mgr.GetScheme(),
 		ServiceAccountTokenIssuer: issuer,
 		ManagementCA:              []byte("test-ca"),
+		KubeVirtInstalled:         kubeVirtInstalled,
 	}).SetupWithManager(mgr)).To(Succeed())
 
 	mgrCtx, cancel := context.WithCancel(ctx)

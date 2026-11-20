@@ -89,6 +89,7 @@ var watchedTypeResources = map[string]struct{ group, resource string }{
 	"VirtualMachine":         {"kubevirt.io", "virtualmachines"},
 	"VirtualMachineInstance": {"kubevirt.io", "virtualmachineinstances"},
 	"Secret":                 {"", "secrets"},
+	"Pod":                    {"", "pods"},
 	"DPU":                    {"provisioning.dpu.nvidia.com", "dpus"},
 	"DPUDevice":              {"provisioning.dpu.nvidia.com", "dpudevices"},
 	"DPUNode":                {"provisioning.dpu.nvidia.com", "dpunodes"},
@@ -113,6 +114,7 @@ var _ = Describe("Manager RBAC", func() {
 		}{
 			{group: "", resource: "secrets", verbs: []string{"get"}},
 			{group: "", resource: "serviceaccounts", verbs: []string{"create", "delete", "get", "patch"}},
+			{group: "", resource: "pods", verbs: []string{"create", "delete", "get", "list", "patch", "watch"}},
 			{group: "", resource: "serviceaccounts/token", verbs: []string{"create"}},
 			{group: "events.k8s.io", resource: "events", verbs: []string{"create", "patch"}},
 			{group: "provisioning.dpu.nvidia.com", resource: "dpus", verbs: []string{"delete", "get", "patch"}},

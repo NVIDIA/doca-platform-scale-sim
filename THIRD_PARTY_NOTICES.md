@@ -126,6 +126,8 @@ the e2e suite. They are not redistributed.
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | BSD-3-Clause |
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | Apache-2.0 |
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | BSD-3-Clause |
+| `go.opentelemetry.io/otel/log` | Apache-2.0 |
+| `go.opentelemetry.io/otel/log` | BSD-3-Clause |
 | `go.opentelemetry.io/otel/metric` | Apache-2.0 |
 | `go.opentelemetry.io/otel/metric` | BSD-3-Clause |
 | `go.opentelemetry.io/otel/sdk` | Apache-2.0 |

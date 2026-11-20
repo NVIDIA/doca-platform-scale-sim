@@ -39,6 +39,7 @@ import (
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/naming"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/ownership"
+	"github.com/NVIDIA/doca-platform-scale-sim/internal/pod"
 )
 
 // instanceChildren are the objects one converge pass found in place. A nil
@@ -48,6 +49,7 @@ type instanceChildren struct {
 	device *provisioningv1.DPUDevice
 	vm     *virtv1.VirtualMachine
 	vmi    *virtv1.VirtualMachineInstance
+	pod    *corev1.Pod
 }
 
 func (c instanceChildren) observedUIDs() scalev1alpha1.ObservedUIDs {
@@ -64,52 +66,69 @@ func (c instanceChildren) observedUIDs() scalev1alpha1.ObservedUIDs {
 	if c.vmi != nil {
 		uids.VirtualMachineInstance = string(c.vmi.UID)
 	}
+	if c.pod != nil {
+		uids.Pod = string(c.pod.UID)
+	}
 	return uids
 }
 
 // converge ensures one ordinal's children in the order the guest needs them:
-// credentials and cloud-init first, then the DPUDevice, then the
-// VirtualMachine that boots from both, and only then the BMC address that
-// lets DPF claim the device.
+// credentials and the guest Secret first, then the DPUDevice, then the
+// VirtualMachine or Pod that starts from both, and only then the BMC address
+// that lets DPF claim the device.
 func (r *SimInstanceReconciler) converge(
 	ctx context.Context,
 	fleet *scalev1alpha1.SimFleet,
 	instance *scalev1alpha1.SimInstance,
 ) (instanceChildren, error) {
 	var children instanceChildren
-	cloudInitReady, err := r.ensureInstanceCredentials(ctx, fleet, instance)
+	guestSecretReady, err := r.ensureInstanceCredentials(ctx, fleet, instance)
 	if err != nil {
 		return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceCredentialsReady, err)
 	}
 	if children.device, err = r.ensureInstanceDevice(ctx, fleet, instance); err != nil {
 		return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceDeviceCreated, err)
 	}
-	children.vm, err = r.ensureInstanceVirtualMachine(ctx, fleet, instance, cloudInitReady, children.device)
-	if err != nil {
-		return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, err)
-	}
-	if children.vmi, err = r.getInstanceVMI(ctx, children.vm); err != nil {
-		return children, err
+	if fleet.Spec.PodTemplate != nil {
+		children.pod, err = r.ensureInstancePod(ctx, fleet, instance, guestSecretReady, children.device)
+		if err != nil {
+			return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, err)
+		}
+	} else {
+		children.vm, err = r.ensureInstanceVirtualMachine(ctx, fleet, instance, guestSecretReady, children.device)
+		if err != nil {
+			return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, err)
+		}
+		if children.vmi, err = r.getInstanceVMI(ctx, children.vm); err != nil {
+			return children, err
+		}
 	}
 	if err := r.ensureInstanceBMCIP(ctx, fleet, instance, children); err != nil {
 		return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceSelectable, err)
 	}
-	observeInstanceVM(fleet, instance, children)
+	observeInstanceGuest(fleet, instance, children)
 	children.dpu, err = r.observeInstanceDPU(ctx, fleet, instance)
 	return children, err
 }
 
-// ensureInstanceCredentials ensures the DPU agent credentials and the
-// cloud-init Secret, and reports whether that Secret is in place for the
-// VirtualMachine to mount. A fleet that boots guests needs the Secret even
-// with the agent disabled; only the token in it is conditional.
+// validateGuestTemplate is the error a fleet's guest template carries, or nil
+// when it can be rendered. A VirtualMachine template needs KubeVirt, and is
+// refused without asking the cluster for a KubeVirt object.
+func (r *SimInstanceReconciler) validateGuestTemplate(fleet *scalev1alpha1.SimFleet) error {
+	return guestTemplateError(fleet, r.KubeVirtInstalled)
+}
+
+// ensureInstanceCredentials ensures the DPU agent credentials and the guest
+// Secret, and reports whether that Secret is in place for the guest to read.
+// It is the cloud-init Secret of a VirtualMachine and the guest Secret of a
+// Pod. A fleet that boots guests needs the Secret even with the agent
+// disabled; only the token in it is conditional.
 func (r *SimInstanceReconciler) ensureInstanceCredentials(
 	ctx context.Context,
 	fleet *scalev1alpha1.SimFleet,
 	instance *scalev1alpha1.SimInstance,
 ) (bool, error) {
-	tmpl := fleet.Spec.VirtualMachineTemplate
-	if tmpl == nil || kubevirt.ValidateTemplate(tmpl) != nil {
+	if !fleetBootsGuests(fleet) || r.validateGuestTemplate(fleet) != nil {
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceCredentialsReady, true,
 			"NotRequired", "No guest boots from this instance")
 		return false, nil
@@ -126,7 +145,7 @@ func (r *SimInstanceReconciler) ensureInstanceCredentials(
 	secretReady := false
 	if accessReady {
 		var err error
-		if secretReady, err = r.ensureInstanceCloudInitSecret(ctx, fleet, instance, serviceAccount); err != nil {
+		if secretReady, err = r.ensureInstanceGuestSecret(ctx, fleet, instance, serviceAccount); err != nil {
 			return false, err
 		}
 	}
@@ -136,7 +155,7 @@ func (r *SimInstanceReconciler) ensureInstanceCredentials(
 			"NotRequired", "The DPU agent is disabled")
 	case secretReady:
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceCredentialsReady, true,
-			"Ready", "DPU agent credentials and cloud-init Secret are in place")
+			"Ready", "DPU agent credentials and "+guestSecretKind(fleet)+" are in place")
 	default:
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceCredentialsReady, false,
 			"Progressing", "DPU agent credentials are being created")
@@ -178,13 +197,29 @@ func (r *SimInstanceReconciler) ensureInstanceAgentAccess(
 	return serviceAccount, ready, nil
 }
 
-// ensureInstanceCloudInitSecret creates the create-only cloud-init Secret.
-// Its Get precedes token issuance because the Secret is the durable record
+// guestSecretKind names the Secret a guest reads its files from, for messages.
+func guestSecretKind(fleet *scalev1alpha1.SimFleet) string {
+	if fleet.Spec.PodTemplate != nil {
+		return "guest Secret"
+	}
+	return "cloud-init Secret"
+}
+
+// guestSecretName is the Secret the fleet's guests read their files from.
+func guestSecretName(fleet *scalev1alpha1.SimFleet, ordinal int) string {
+	if fleet.Spec.PodTemplate != nil {
+		return naming.GuestSecretName(fleet.Name, ordinal)
+	}
+	return naming.CloudInitSecretName(fleet.Name, ordinal)
+}
+
+// ensureInstanceGuestSecret creates the create-only cloud-init or guest
+// Secret. Its Get precedes token issuance because the Secret is the durable record
 // that this ordinal already holds a credential; an existing one only has its
 // identity labels repaired. A cache miss is confirmed against the API server,
 // since the cache lags a fresh create and drops a Secret that lost its labels,
 // and either would otherwise mint a second token.
-func (r *SimInstanceReconciler) ensureInstanceCloudInitSecret(
+func (r *SimInstanceReconciler) ensureInstanceGuestSecret(
 	ctx context.Context,
 	fleet *scalev1alpha1.SimFleet,
 	instance *scalev1alpha1.SimInstance,
@@ -192,7 +227,7 @@ func (r *SimInstanceReconciler) ensureInstanceCloudInitSecret(
 ) (bool, error) {
 	ordinal := instance.Spec.Ordinal
 	secret := &corev1.Secret{}
-	key := client.ObjectKey{Name: naming.CloudInitSecretName(fleet.Name, ordinal), Namespace: fleet.Namespace}
+	key := client.ObjectKey{Name: guestSecretName(fleet, ordinal), Namespace: fleet.Namespace}
 	found, err := r.getChild(ctx, key, secret, "Secret")
 	if err == nil && !found {
 		found, err = r.getLiveChild(ctx, key, secret, "Secret")
@@ -203,7 +238,7 @@ func (r *SimInstanceReconciler) ensureInstanceCloudInitSecret(
 	if found {
 		return true, r.syncChildLabels(ctx, instance, secret, cloudinit.SecretLabels(fleet, ordinal), "Secret")
 	}
-	desired, err := r.renderInstanceCloudInitSecret(ctx, fleet, ordinal, serviceAccount)
+	desired, err := r.renderInstanceGuestSecret(ctx, fleet, ordinal, serviceAccount)
 	if err != nil || desired == nil {
 		return false, err
 	}
@@ -211,16 +246,25 @@ func (r *SimInstanceReconciler) ensureInstanceCloudInitSecret(
 	return live != nil, err
 }
 
-// renderInstanceCloudInitSecret returns nil while the ServiceAccount the
+// renderGuestSecret renders the Secret of the fleet's guest kind from the
+// management kubeconfig.
+func renderGuestSecret(fleet *scalev1alpha1.SimFleet, ordinal int, kubeconfig []byte) (*corev1.Secret, error) {
+	if fleet.Spec.PodTemplate != nil {
+		return pod.DesiredGuestSecret(fleet, ordinal, kubeconfig)
+	}
+	return cloudinit.DesiredSecret(fleet, ordinal, kubeconfig)
+}
+
+// renderInstanceGuestSecret returns nil while the ServiceAccount the
 // token is issued for is not in place yet.
-func (r *SimInstanceReconciler) renderInstanceCloudInitSecret(
+func (r *SimInstanceReconciler) renderInstanceGuestSecret(
 	ctx context.Context,
 	fleet *scalev1alpha1.SimFleet,
 	ordinal int,
 	serviceAccount *corev1.ServiceAccount,
 ) (*corev1.Secret, error) {
 	if !dpuagent.Enabled(fleet) {
-		return cloudinit.DesiredSecret(fleet, ordinal, nil)
+		return renderGuestSecret(fleet, ordinal, nil)
 	}
 	if serviceAccount == nil || serviceAccount.UID == "" {
 		return nil, nil
@@ -231,7 +275,7 @@ func (r *SimInstanceReconciler) renderInstanceCloudInitSecret(
 	if err != nil {
 		return nil, err
 	}
-	if _, err := cloudinit.DesiredSecret(fleet, ordinal, preflight); err != nil {
+	if _, err := renderGuestSecret(fleet, ordinal, preflight); err != nil {
 		return nil, err
 	}
 	if r.ServiceAccountTokenIssuer == nil {
@@ -245,7 +289,7 @@ func (r *SimInstanceReconciler) renderInstanceCloudInitSecret(
 	if err != nil {
 		return nil, err
 	}
-	return cloudinit.DesiredSecret(fleet, ordinal, kubeconfig)
+	return renderGuestSecret(fleet, ordinal, kubeconfig)
 }
 
 func (r *SimInstanceReconciler) ensureInstanceDevice(
@@ -281,7 +325,7 @@ func (r *SimInstanceReconciler) ensureInstanceVirtualMachine(
 ) (*virtv1.VirtualMachine, error) {
 	tmpl := fleet.Spec.VirtualMachineTemplate
 	if tmpl != nil {
-		if err := kubevirt.ValidateTemplate(tmpl); err != nil {
+		if err := r.validateGuestTemplate(fleet); err != nil {
 			return nil, err
 		}
 	}
@@ -319,6 +363,49 @@ func (r *SimInstanceReconciler) ensureInstanceVirtualMachine(
 	return vm, nil
 }
 
+// ensureInstancePod creates the guest Pod once its device and guest Secret
+// exist; a Pod without its Secret would not start. The Pod spec is
+// create-only, like the VirtualMachine's.
+func (r *SimInstanceReconciler) ensureInstancePod(
+	ctx context.Context,
+	fleet *scalev1alpha1.SimFleet,
+	instance *scalev1alpha1.SimInstance,
+	guestSecretReady bool,
+	device *provisioningv1.DPUDevice,
+) (*corev1.Pod, error) {
+	if err := pod.ValidateTemplate(fleet.Spec.PodTemplate); err != nil {
+		return nil, err
+	}
+	switch {
+	case !instanceConditionTrue(instance, scalev1alpha1.SimInstanceCredentialsReady):
+		setInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, false,
+			"WaitingForCredentials", "DPU agent credentials are not in place")
+		return nil, nil
+	case device == nil:
+		setInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, false,
+			"WaitingForDevice", "DPUDevice is not in place")
+		return nil, nil
+	case !guestSecretReady:
+		setInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, false,
+			"WaitingForGuestSecret", "guest Secret is not in place")
+		return nil, nil
+	}
+	live, err := r.ensureOwnedChild(ctx, instance,
+		pod.DesiredPod(fleet, instance.Spec.Ordinal), &corev1.Pod{}, "Pod")
+	if err != nil {
+		return nil, err
+	}
+	guest, _ := live.(*corev1.Pod)
+	if guest == nil {
+		setInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, false,
+			"Progressing", "Pod is being created")
+		return nil, nil
+	}
+	setInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, true,
+		"Created", "Every child is in place")
+	return guest, nil
+}
+
 // getInstanceVMI returns the VirtualMachineInstance KubeVirt runs for vm, or
 // nil when there is none.
 func (r *SimInstanceReconciler) getInstanceVMI(
@@ -350,6 +437,14 @@ func guestBelongsToInstance(
 		ownership.ControlledBy(vmi, virtv1.GroupVersion.String(), "VirtualMachine", vm.Name, vm.UID)
 }
 
+// podBelongsToInstance checks that the Pod is controlled by this instance,
+// by name and UID. Its address becomes the Redfish endpoint DPF authenticates
+// against, so a copied name or label is not enough.
+func podBelongsToInstance(instance *scalev1alpha1.SimInstance, guest *corev1.Pod) bool {
+	return guest != nil &&
+		ownership.ControlledBy(guest, scalev1alpha1.GroupVersion.String(), "SimInstance", instance.Name, instance.UID)
+}
+
 // ensureInstanceBMCIP publishes the guest's BMC address and the selection
 // labels in one patch: a device DPF can select before it has an address sends
 // DPF at nothing. The guest's address is the
@@ -362,7 +457,7 @@ func (r *SimInstanceReconciler) ensureInstanceBMCIP(
 ) error {
 	device := children.device
 	switch {
-	case fleet.Spec.VirtualMachineTemplate == nil:
+	case !fleetBootsGuests(fleet):
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceSelectable, false,
 			"NoVirtualMachine", "No guest serves this device's BMC")
 		return nil
@@ -372,8 +467,15 @@ func (r *SimInstanceReconciler) ensureInstanceBMCIP(
 		return nil
 	}
 	log := logf.FromContext(ctx)
-	address := ""
-	if guestBelongsToInstance(instance, children.vm, children.vmi) {
+	address, unreported := "", "The guest has not reported a bridged IPv4 address"
+	if fleet.Spec.PodTemplate != nil {
+		unreported = "The Pod has not reported an IPv4 address"
+		if podBelongsToInstance(instance, children.pod) {
+			address = pod.PodIPv4(children.pod)
+		} else if children.pod != nil {
+			log.V(1).Info("Ignored a Pod this SimInstance does not own", "pod", children.pod.Name)
+		}
+	} else if guestBelongsToInstance(instance, children.vm, children.vmi) {
 		address = kubevirt.GuestBridgedIPv4(children.vmi)
 	} else if children.vmi != nil {
 		log.V(1).Info("Ignored a VirtualMachineInstance this SimInstance does not own",
@@ -399,7 +501,7 @@ func (r *SimInstanceReconciler) ensureInstanceBMCIP(
 	}
 	if !deviceSelectable(fleet, device) {
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceSelectable, false,
-			"WaitingForGuestAddress", "The guest has not reported a bridged IPv4 address")
+			"WaitingForGuestAddress", unreported)
 		return nil
 	}
 	setInstanceCondition(instance, scalev1alpha1.SimInstanceSelectable, true,
@@ -417,6 +519,26 @@ func deviceSelectable(fleet *scalev1alpha1.SimFleet, device *provisioningv1.DPUD
 		}
 	}
 	return true
+}
+
+func observeInstanceGuest(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.SimInstance, children instanceChildren) {
+	switch {
+	case fleet.Spec.PodTemplate != nil:
+		observeInstancePod(instance, children)
+	default:
+		observeInstanceVM(fleet, instance, children)
+	}
+}
+
+// observeInstancePod reports the guest ready once the Pod's Ready condition,
+// which the DPU agent's port probe drives, is true.
+func observeInstancePod(instance *scalev1alpha1.SimInstance, children instanceChildren) {
+	if !pod.Ready(children.pod) {
+		setInstanceCondition(instance, scalev1alpha1.SimInstanceGuestReady, false,
+			"WaitingForPod", "Pod is not ready")
+		return
+	}
+	setInstanceCondition(instance, scalev1alpha1.SimInstanceGuestReady, true, "Ready", "Pod is ready")
 }
 
 func observeInstanceVM(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.SimInstance, children instanceChildren) {
@@ -537,7 +659,7 @@ func (r *SimInstanceReconciler) getLiveChild(
 // only while it carries the fleet label.
 func labelScopedCacheKind(obj client.Object) bool {
 	switch obj.(type) {
-	case *corev1.Secret, *corev1.ServiceAccount, *rbacv1.Role, *rbacv1.RoleBinding:
+	case *corev1.Secret, *corev1.ServiceAccount, *rbacv1.Role, *rbacv1.RoleBinding, *corev1.Pod:
 		return true
 	}
 	return false
