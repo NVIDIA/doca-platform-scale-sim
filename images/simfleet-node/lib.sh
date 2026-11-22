@@ -39,6 +39,12 @@ simfleet_dpuagent_bin() {
 	printf '%s\n' "${DPUAGENT_BIN:-${SIMFLEET_RECIPE_DIR:-${ROOT}}/../../bin/mock-dpuagent}"
 }
 
+# simfleet_mock_ovs_bin echoes the linux/amd64 mock-ovs binary to bake in.
+# `make mock-ovs-build` writes the default location.
+simfleet_mock_ovs_bin() {
+	printf '%s\n' "${MOCK_OVS_BIN:-${SIMFLEET_RECIPE_DIR:-${ROOT}}/../../bin/mock-ovs}"
+}
+
 # simfleet_mock_ref echoes the commit mock-dpuagent is built from. This is
 # hack/dpuagent/mock.ref and nothing else: that file is what
 # hack/dpuagent/build.sh checks out, so it is the only revision that describes

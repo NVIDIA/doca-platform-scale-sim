@@ -38,6 +38,12 @@ if [ ! -s "${DPUAGENT_BIN}" ]; then
 	echo "build it with: make dpuagent-build" >&2
 	exit 1
 fi
+MOCK_OVS_BIN="${MOCK_OVS_BIN:-}"
+if [ ! -s "${MOCK_OVS_BIN}" ]; then
+	echo "mock-ovs binary not found at ${MOCK_OVS_BIN:-<unset>}" >&2
+	echo "build it with: make mock-ovs-build" >&2
+	exit 1
+fi
 
 disk_bytes="$(simfleet_size_to_bytes "${DISK_SIZE}")"
 min_root_bytes="$(simfleet_min_root_bytes "${DISK_SIZE}")"
@@ -181,6 +187,18 @@ virt-customize -a "${OUT_IMG}" \
 	--run-command 'systemctl daemon-reload' \
 	--run-command 'systemctl enable mock-dpuagent.service' \
 	--run-command 'systemctl enable wait-kubelet-join.service'
+
+# mock-ovs stands in for ovsdb-server and ovs-vswitchd, which this image never
+# installs; its client tools come from guest/install.sh. It needs no
+# configuration, so it is enabled under multi-user.target and starts before
+# cloud-final and kubelet, as its unit orders it.
+virt-customize -a "${OUT_IMG}" \
+	--upload "${MOCK_OVS_BIN}:/usr/local/bin/mock-ovs" \
+	--copy-in "${ROOT}/guest/mock-ovs.service:/usr/lib/systemd/system" \
+	--run-command 'chmod 0755 /usr/local/bin/mock-ovs' \
+	--run-command 'chmod 0644 /usr/lib/systemd/system/mock-ovs.service' \
+	--run-command 'systemctl daemon-reload' \
+	--run-command 'systemctl enable mock-ovs.service'
 
 virt-sysprep -a "${OUT_IMG}" \
 	--operations machine-id,ssh-hostkeys,net-hostname,net-hwaddr,dhcp-client-state,logfiles,tmp-files,crash-data

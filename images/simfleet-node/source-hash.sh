@@ -43,6 +43,16 @@ if [ ! -s "${dpuagent_bin}" ]; then
 fi
 dpuagent_digest="$(simfleet_sha256 < "${dpuagent_bin}")"
 
+# mock-ovs is guest content too. It is built from pkg/mock-ovs in this checkout,
+# so the binary digest is what says which bytes go into the guest.
+mock_ovs_bin="$(simfleet_mock_ovs_bin)"
+if [ ! -s "${mock_ovs_bin}" ]; then
+	echo "mock-ovs binary not found at ${mock_ovs_bin}" >&2
+	echo "build it with: make mock-ovs-build" >&2
+	exit 1
+fi
+mock_ovs_digest="$(simfleet_sha256 < "${mock_ovs_bin}")"
+
 files=(
 	Dockerfile
 	Dockerfile.builder
@@ -67,6 +77,7 @@ done < <(find "${ROOT}/guest" -type f | LC_ALL=C sort)
 	printf 'image-version=%s\n' "${IMAGE_VERSION}"
 	printf 'mock-ref=%s\n' "${mock_ref}"
 	printf 'dpuagent-digest=%s\n' "${dpuagent_digest}"
+	printf 'mock-ovs-digest=%s\n' "${mock_ovs_digest}"
 	for path in "${files[@]}"; do
 		printf 'file=%s\n' "${path}"
 		cat "${ROOT}/${path}"

@@ -201,9 +201,10 @@ test-e2e: check-e2e-host kind ## Run the e2e tests on Kind with DPF and KubeVirt
 test-e2e-run: check-e2e-host setup-test-e2e deploy-e2e-dpf deploy-e2e-kubevirt deploy-e2e-bfb-fixtures manifests generate fmt vet
 	# Cached build: where Docker images persist between runs, an image whose
 	# stamped source hash matches this checkout's recipe is reused, and any
-	# recipe change rebuilds it. The agent binary is guest content, so it is
-	# built first and passed in.
+	# recipe change rebuilds it. The agent and mock-ovs binaries are guest
+	# content, so they are built first and passed in.
 	$(MAKE) dpuagent-build
+	$(MAKE) mock-ovs-build
 	$(MAKE) -C $(NODE_IMAGE_DIR) node-image-build-cached NODE_IMG=$(E2E_NODE_IMG) \
 		DPUAGENT_BIN=$(E2E_DPUAGENT_BIN)
 	$(KIND) load docker-image $(E2E_NODE_IMG) --name $(KIND_CLUSTER)

@@ -52,6 +52,7 @@ binary the image bakes in (see [Mock DPU agent](#mock-dpu-agent-is-baked-but-not
 
 ```sh
 make -C ../.. dpuagent-build
+make -C ../.. mock-ovs-build
 make node-image-build
 make node-image-push NODE_IMG=registry.example.com/simfleet-node:v0.2.0
 ```
@@ -90,6 +91,7 @@ path.
 | kubeadm prerequisites | `/etc/modules-load.d/simfleet.conf` (`overlay`, `br_netfilter`) and `/etc/sysctl.d/99-simfleet-k8s.conf` (bridge nf-call for IPv4/IPv6, `net.ipv4.ip_forward`) |
 | CNI | `kubernetes-cni` plugins in `/opt/cni/bin` and kube-flannel's default `/etc/cni/net.d/10-flannel.conflist` |
 | Mock DPU agent | `/opt/dpf/mock-dpuagent` built from the doca-platform commit pinned by `hack/dpuagent/mock.ref`, plus `/opt/dpf/wait-kubelet-join.sh`, and enabled `mock-dpuagent.service` and `wait-kubelet-join.service` |
+| Mock OVS | `/usr/local/bin/mock-ovs` built from `pkg/mock-ovs`, enabled `mock-ovs.service` (creates `br-sfc`, `br-hbn` and `br-ovn`, the peers of sfc-controller's patch and OVN interfaces, and serves `/var/run/openvswitch/db.sock`), and the `ovs-vsctl` and `ovs-ofctl` clients from `openvswitch-switch`. That package also ships the OVS daemon units, so `openvswitch-switch`, `ovs-record-hostname`, `ovsdb-server` and `ovs-vswitchd` are masked; the daemon binaries stay on disk |
 | Boot signal | `qemu-guest-agent`, activated by its virtio-port udev rule, so KubeVirt reports `AgentConnected` once the guest is actually up |
 | Disk | Root filesystem grown offline to 10G while preserving the cloud image's GPT partition numbers, then sysprepped and sparsified |
 
