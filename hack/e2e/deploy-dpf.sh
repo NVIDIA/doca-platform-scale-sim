@@ -23,7 +23,7 @@ KUBECTL_BIN="${KUBECTL:-kubectl}"
 # An HTTP chart repository, as NGC publishes DPF; leave empty for an oci:// chart.
 DPF_HELM_REPO="${DPF_HELM_REPO:-https://helm.ngc.nvidia.com/nvidia/doca}"
 DPF_HELM_CHART="${DPF_HELM_CHART:-dpf-operator}"
-DPF_HELM_VERSION="${DPF_HELM_VERSION:-v26.8.0}"
+DPF_HELM_VERSION="${DPF_HELM_VERSION:-v30.0.0}"
 DPF_OPERATOR_NAMESPACE="${DPF_OPERATOR_NAMESPACE:-dpf-operator-system}"
 DPF_OPERATOR_RELEASE="${DPF_OPERATOR_RELEASE:-dpf-operator}"
 DPF_OPERATOR_CONFIG="${DPF_OPERATOR_CONFIG:-}"

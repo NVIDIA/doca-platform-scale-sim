@@ -1,0 +1,28 @@
+# p0 -> dummy eth1, dummy eth2 -> pf0hpf. It reuses the uplinks of
+# sfc/uplinks, so the suite deletes the physical chain first: a port in two
+# chains is a conflict, not a second chain.
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUServiceChain
+metadata:
+  name: e2e-chain
+  namespace: dpf-operator-system
+spec:
+  template:
+    spec:
+      template:
+        spec:
+          switches:
+            - ports:
+                - serviceInterface:
+                    matchLabels:
+                      scale.dpu.nvidia.com/e2e-interface: p0
+                - serviceInterface:
+                    matchLabels:
+                      scale.dpu.nvidia.com/e2e-interface: dummy-eth1
+            - ports:
+                - serviceInterface:
+                    matchLabels:
+                      scale.dpu.nvidia.com/e2e-interface: dummy-eth2
+                - serviceInterface:
+                    matchLabels:
+                      scale.dpu.nvidia.com/e2e-interface: pf0hpf

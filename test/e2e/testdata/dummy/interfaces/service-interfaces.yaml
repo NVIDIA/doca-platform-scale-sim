@@ -1,0 +1,39 @@
+# The two interfaces the dummy DPUService attaches. network is the NAD the
+# operator creates for br-sfc.
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUServiceInterface
+metadata:
+  name: e2e-dummy-eth1
+  namespace: dpf-operator-system
+spec:
+  template:
+    spec:
+      template:
+        metadata:
+          labels:
+            scale.dpu.nvidia.com/e2e-interface: dummy-eth1
+        spec:
+          interfaceType: service
+          service:
+            serviceID: e2e-dummy
+            network: mybrsfc
+            interfaceName: eth1
+---
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUServiceInterface
+metadata:
+  name: e2e-dummy-eth2
+  namespace: dpf-operator-system
+spec:
+  template:
+    spec:
+      template:
+        metadata:
+          labels:
+            scale.dpu.nvidia.com/e2e-interface: dummy-eth2
+        spec:
+          interfaceType: service
+          service:
+            serviceID: e2e-dummy
+            network: mybrsfc
+            interfaceName: eth2

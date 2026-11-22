@@ -21,12 +21,18 @@ jobs:
   e2e:
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     runs-on: ubuntu-latest
-    # Must exceed E2E_TEST_TIMEOUT (119m) plus the cluster, DPF, KubeVirt and
-    # node image setup, or the job is killed before the suite reports.
-    timeout-minutes: 180
+    # Must exceed E2E_TEST_TIMEOUT (200m) plus the cluster, DPF, KubeVirt and
+    # node image setup, or the job is killed before the suite reports. The
+    # setup can take about 70m when the node image is not cached.
+    timeout-minutes: 270
     env:
       KUBECTL_VERSION: v1.36.4
       KIND_CLUSTER: simfleet-controller-test-e2e
+      # Public DPUService chart the dummy spec pulls, as an OCI repository. The
+      # chart name and version default to dummydpuservice-chart and v0.1.0.
+      E2E_DUMMY_CHART_REPO: oci://ghcr.io/souleb/doca-platform
+      # The dummy spec's 44m adds to the 147m of the other specs.
+      E2E_TEST_TIMEOUT: 200m
     steps:
       # Kind, DPF, KubeVirt and the containerDisk build do not fit in the
       # runner's default free space. The containerd image store keeps each

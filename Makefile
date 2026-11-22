@@ -99,14 +99,14 @@ test: setup-envtest ## Run the unit and envtest tests. `make verify` checks the 
 	$(MAKE) -C "$(CURDIR)/pkg/mock-ovs" test GO_TEST_ARGS="$(GO_TEST_ARGS)"
 
 # e2e uses a local Kind cluster and DPF prerequisite charts from
-# https://github.com/NVIDIA/doca-platform/tree/public-release-v26.8
-# pinned to e343a51b63ee8cddd29f71891455ff6f83e50d94.
+# https://github.com/NVIDIA/doca-platform/tree/public-release-v30.0
+# pinned to 15f1775b1baa453fa8d7f53082ece17f8f2bf091 (v30.0.0-latest-stable).
 # `make test-e2e` also builds and deploys the controller, then deletes the cluster.
 KIND_CLUSTER ?= simfleet-controller-test-e2e
 KIND_KUBERNETES_VERSION ?= v1.36.4
 KIND_NODE_IMAGE ?= kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
 DPF_HELMFILES_REPO ?= https://github.com/NVIDIA/doca-platform.git
-DPF_HELMFILES_REF ?= e343a51b63ee8cddd29f71891455ff6f83e50d94
+DPF_HELMFILES_REF ?= 15f1775b1baa453fa8d7f53082ece17f8f2bf091
 DPF_HELMFILES_DIR ?= $(LOCALBIN)/dpf-helmfiles
 HELMFILE_FILE ?= $(DPF_HELMFILES_DIR)/deploy/helmfiles/prereqs.yaml
 
@@ -138,7 +138,7 @@ deploy-e2e-prereqs: setup-test-e2e fetch-e2e-helmfiles helmfile helm helm-diff h
 
 DPF_HELM_REPO ?= https://helm.ngc.nvidia.com/nvidia/doca
 DPF_HELM_CHART ?= dpf-operator
-DPF_HELM_VERSION ?= v26.8.0
+DPF_HELM_VERSION ?= v30.0.0
 DPF_OPERATOR_NAMESPACE ?= dpf-operator-system
 DPF_OPERATOR_RELEASE ?= dpf-operator
 DPF_OPERATOR_CONFIG ?= $(CURDIR)/hack/e2e/dpfoperatorconfig.yaml
@@ -182,9 +182,13 @@ E2E_DPUAGENT_BIN := $(CURDIR)/bin/mock-dpuagent
 # the guest agent, 2m per instance for a delegated pod address, 5m for the BFB
 # download, and 27m for Redfish provisioning and the tenant join; then 6m to
 # tear the replaced ordinal down and 27m to bring it back, and 6m to tear the
-# scaled-away ordinal down. That is 115m, which leaves the rest ~4m. The 24h
-# management token lifetime is the hard ceiling.
-E2E_TEST_TIMEOUT ?= 119m
+# scaled-away ordinal down. The sfc-controller spec adds up to 32m: 10m for the
+# DaemonSet, 2m to apply, 5m each for the host objects, the ServiceChains and
+# the NodeServiceInterfaces, and 5m for the teardown. That is 147m, which leaves
+# the rest ~8m. The dummy DPUService spec runs only when E2E_DUMMY_CHART_REPO is
+# set and adds up to 44m more, so raise this to 200m with it. The 24h management
+# token lifetime is the hard ceiling.
+E2E_TEST_TIMEOUT ?= 155m
 
 .PHONY: deploy-e2e-kubevirt
 deploy-e2e-kubevirt: setup-test-e2e ## Install KubeVirt on the Kind cluster

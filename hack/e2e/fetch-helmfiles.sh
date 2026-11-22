@@ -19,7 +19,7 @@ set -o pipefail
 set -o errexit
 
 DPF_HELMFILES_REPO="${DPF_HELMFILES_REPO:-https://github.com/NVIDIA/doca-platform.git}"
-DPF_HELMFILES_REF="${DPF_HELMFILES_REF:-e343a51b63ee8cddd29f71891455ff6f83e50d94}"
+DPF_HELMFILES_REF="${DPF_HELMFILES_REF:-15f1775b1baa453fa8d7f53082ece17f8f2bf091}"
 DPF_HELMFILES_DIR="${DPF_HELMFILES_DIR:?DPF_HELMFILES_DIR is required}"
 
 mkdir -p "$(dirname "${DPF_HELMFILES_DIR}")"

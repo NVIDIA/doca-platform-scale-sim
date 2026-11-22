@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	dpuservicev1 "github.com/nvidia/doca-platform/api/dpuservice/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -98,6 +99,9 @@ const (
 
 var _ = Describe("SimFleet", Ordered, func() {
 	AfterAll(func() {
+		// Before the fleet: the tenant cluster's controllers release the
+		// chain's resources only while its nodes still exist.
+		cleanupSFCObjects()
 		cleanupFleetInventory(fleetNamespace, fleetName)
 	})
 
@@ -463,6 +467,125 @@ var _ = Describe("SimFleet", Ordered, func() {
 				expectPhaseDelaysApplied(g, naming.VirtualMachineName(fleetName, ordinal), phases)
 			}
 		}, time.Minute, 5*time.Second).Should(Succeed())
+	})
+
+	// The next two specs check what the fleet is for: stock sfc-controller
+	// running against the guests' mock-ovs. DPF deploys sfc-controller with
+	// the operator, so there is nothing to install; they create the objects
+	// sfc-controller acts on and check what it reports. They run while both
+	// ordinals are joined, and delete everything they create before the
+	// replacement spec removes a node.
+	//
+	// The uplink p0 is a physical interface, which needs only the port mock-ovs
+	// seeds, so it reaches Ready. The PF pf0hpf needs the ECPF's representor,
+	// and a guest has no PCI functions, so it cannot. A chain that names it is
+	// refused, so the specs assert both outcomes: what sfc-controller can do
+	// on the mock, and the error it gives for what it cannot.
+	It("reconciles the physical uplink and refuses the chain through the PF through sfc-controller", func() {
+		// A plain defer, not DeferCleanup: the dump has to run while the failing
+		// spec unwinds, before the suite's teardown deletes the objects and the
+		// tenant cluster it reads.
+		defer func() {
+			if CurrentSpecReport().Failed() {
+				dumpSFCDiagnostics()
+			}
+		}()
+		tenant, err := tenantClient()
+		Expect(err).NotTo(HaveOccurred(), "Failed to build the tenant client")
+
+		By("waiting for sfc-controller to be Ready on every DPU node")
+		Eventually(func(g Gomega) {
+			expectSFCControllerReady(g, tenant, nodes)
+		}, sfcControllerReadyTimeout, 5*time.Second).Should(Succeed())
+
+		By("applying the uplink DPUServiceInterfaces and the DPUServiceChain between them")
+		Eventually(func(g Gomega) {
+			applyManifestDir(g, "sfc/uplinks")
+			applyManifestDir(g, "sfc/physical")
+		}).Should(Succeed())
+
+		By("waiting for the physical uplink to report reconciled")
+		Eventually(func(g Gomega) {
+			expectHostConditionsTrue(g, "dpuserviceinterface", "e2e-p0",
+				readyCondition, string(dpuservicev1.ConditionServiceInterfaceSetReconciled))
+		}, sfcReconcileTimeout, 5*time.Second).Should(Succeed())
+
+		By("waiting for sfc-controller to take p0 and refuse the PF on every node")
+		Eventually(func(g Gomega) {
+			expectNodeServiceInterfaceEntries(g, tenant, nodes,
+				[]string{"e2e-p0"}, map[string]string{"e2e-pf0hpf": representorFailure})
+		}, sfcReconcileTimeout, 5*time.Second).Should(Succeed())
+
+		By("waiting for sfc-controller to refuse the chain through the PF on every node")
+		Eventually(func(g Gomega) {
+			expectServiceChainsNotReconciled(g, tenant, sfcChainName, nodes, notReadyMessage)
+		}, sfcReconcileTimeout, 5*time.Second).Should(Succeed())
+
+		By("checking the PF and the chain do not report Ready on the host")
+		Eventually(func(g Gomega) {
+			expectHostConditionNotTrue(g, "dpuserviceinterface", "e2e-pf0hpf", readyCondition)
+			expectHostConditionNotTrue(g, "dpuservicechain", sfcChainName, readyCondition)
+		}, sfcReconcileTimeout, 5*time.Second).Should(Succeed())
+
+		By("deleting the chain and the interfaces, and waiting for sfc-controller to release them")
+		deleteSFCObjects(tenant, physicalChainObjects)
+	})
+
+	It("refuses the chain through the dummy DPUService without an SF source", func() {
+		if dummyChartRepo() == "" {
+			Skip(dummyChartRepoEnv + " is not set; the dummy DPUService needs dummydpuservice-chart " +
+				"published to a repository the suite can reach")
+		}
+		// A plain defer, not DeferCleanup: the dump has to run while the failing
+		// spec unwinds, before the suite's teardown deletes the objects and the
+		// tenant cluster it reads.
+		defer func() {
+			if CurrentSpecReport().Failed() {
+				dumpSFCDiagnostics()
+			}
+		}()
+		tenant, err := tenantClient()
+		Expect(err).NotTo(HaveOccurred(), "Failed to build the tenant client")
+
+		By("applying the uplinks, the dummy DPUService's interfaces and the DPUService")
+		dummyService, err := renderDummyDPUService()
+		Expect(err).NotTo(HaveOccurred(), "Failed to render the dummy DPUService")
+		Eventually(func(g Gomega) {
+			applyManifestDir(g, "sfc/uplinks")
+			applyManifestDir(g, "dummy/interfaces")
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(dummyService)
+			_, err := run(cmd)
+			g.Expect(err).NotTo(HaveOccurred(), "Failed to apply the dummy DPUService")
+		}).Should(Succeed())
+
+		By("applying the DPUServiceChain through the dummy DPUService")
+		Eventually(func(g Gomega) {
+			applyManifestDir(g, "dummy/chain")
+		}).Should(Succeed())
+
+		// The service's ports are added by ovs-cni when the pod's network is
+		// attached, and ovs-cni needs a VF or SF from sriov, which a guest does
+		// not have. The pod therefore never gets its ports into br-sfc, and the
+		// chain through them, like the one through the PF, is refused.
+		By("waiting for the physical uplink to report reconciled")
+		Eventually(func(g Gomega) {
+			expectHostConditionsTrue(g, "dpuserviceinterface", "e2e-p0",
+				readyCondition, string(dpuservicev1.ConditionServiceInterfaceSetReconciled))
+		}, sfcReconcileTimeout, 5*time.Second).Should(Succeed())
+
+		By("waiting for sfc-controller to refuse the chain through the dummy DPUService on every node")
+		Eventually(func(g Gomega) {
+			expectServiceChainsNotReconciled(g, tenant, sfcChainName, nodes, notReadyMessage)
+		}, sfcReconcileTimeout, 5*time.Second).Should(Succeed())
+
+		By("checking the chain does not report Ready on the host")
+		Eventually(func(g Gomega) {
+			expectHostConditionNotTrue(g, "dpuservicechain", sfcChainName, readyCondition)
+		}, sfcReconcileTimeout, 5*time.Second).Should(Succeed())
+
+		By("deleting the chain, the DPUService and the interfaces, and waiting for sfc-controller to release them")
+		deleteSFCObjects(tenant, dummyChainObjects)
 	})
 
 	It("replaces an ordinal whose VirtualMachine was deleted", func() {
