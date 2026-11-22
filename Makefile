@@ -95,6 +95,8 @@ test: setup-envtest ## Run the unit and envtest tests. `make verify` checks the 
 	# not track, so a cached pass would survive a drift it exists to catch.
 	go test -count=1 ./test/consistency/
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $(TESTPKGS) $(GO_TEST_ARGS) -coverprofile cover.out
+	# pkg/mock-ovs is its own module, so ./... above does not reach it.
+	$(MAKE) -C "$(CURDIR)/pkg/mock-ovs" test GO_TEST_ARGS="$(GO_TEST_ARGS)"
 
 # e2e uses a local Kind cluster and DPF prerequisite charts from
 # https://github.com/NVIDIA/doca-platform/tree/public-release-v26.8
@@ -224,6 +226,7 @@ cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
 .PHONY: lint
 lint: golangci-lint lint-config ## Run golangci-lint linter
 	GOOS=linux "$(GOLANGCI_LINT)" run --timeout 5m
+	$(MAKE) -C "$(CURDIR)/pkg/mock-ovs" lint GOLANGCI_LINT="$(GOLANGCI_LINT)"
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
@@ -307,6 +310,10 @@ commit-check: conform ## Run conform to validate commit messages against .confor
 .PHONY: dpuagent-build
 dpuagent-build: ## Build pinned mock-dpuagent binary into bin/mock-dpuagent.
 	DPUAGENT_OUT="$(E2E_DPUAGENT_BIN)" "$(CURDIR)/hack/dpuagent/build.sh"
+
+.PHONY: mock-ovs-build
+mock-ovs-build: ## Build mock-ovs into bin/mock-ovs for the node images.
+	$(MAKE) -C "$(CURDIR)/pkg/mock-ovs" build
 
 .PHONY: dpuagent-build-test
 dpuagent-build-test: ## Run dpuagent build contract test.
