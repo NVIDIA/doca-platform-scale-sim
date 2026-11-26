@@ -18,24 +18,25 @@ set -o nounset
 set -o pipefail
 set -o errexit
 
-DPF_HELMFILES_REPO="${DPF_HELMFILES_REPO:-https://github.com/NVIDIA/doca-platform.git}"
-DPF_HELMFILES_REF="${DPF_HELMFILES_REF:-e343a51b63ee8cddd29f71891455ff6f83e50d94}"
+HELM="${HELM:?HELM is required}"
+DPF_HELM_REPO="${DPF_HELM_REPO:?DPF_HELM_REPO is required}"
+DPF_HELM_CHART="${DPF_HELM_CHART:?DPF_HELM_CHART is required}"
+DPF_HELM_VERSION="${DPF_HELM_VERSION:?DPF_HELM_VERSION is required}"
 DPF_HELMFILES_DIR="${DPF_HELMFILES_DIR:?DPF_HELMFILES_DIR is required}"
 
-mkdir -p "$(dirname "${DPF_HELMFILES_DIR}")"
+tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
 
-if [[ ! -d "${DPF_HELMFILES_DIR}/.git" ]]; then
-	rm -rf "${DPF_HELMFILES_DIR}"
-	git clone --filter=blob:none --sparse --no-checkout "${DPF_HELMFILES_REPO}" "${DPF_HELMFILES_DIR}"
-	git -C "${DPF_HELMFILES_DIR}" sparse-checkout set deploy/helmfiles
-fi
+"${HELM}" pull "${DPF_HELM_CHART}" --repo "${DPF_HELM_REPO}" --version "${DPF_HELM_VERSION}" \
+	--untar --untardir "${tmp}" > /dev/null
 
-git -C "${DPF_HELMFILES_DIR}" fetch --depth 1 origin "${DPF_HELMFILES_REF}"
-git -C "${DPF_HELMFILES_DIR}" checkout --detach FETCH_HEAD
-
-if [[ ! -f "${DPF_HELMFILES_DIR}/deploy/helmfiles/prereqs.yaml" ]]; then
-	echo "prereqs.yaml not found under ${DPF_HELMFILES_DIR}/deploy/helmfiles" >&2
+if [[ ! -f "${tmp}/${DPF_HELM_CHART}/dev/helmfiles/prereqs.yaml" ]]; then
+	echo "dev/helmfiles/prereqs.yaml not found in chart ${DPF_HELM_CHART} ${DPF_HELM_VERSION}" >&2
 	exit 1
 fi
 
-echo "DPF helmfiles ready at ${DPF_HELMFILES_DIR}/deploy/helmfiles (ref ${DPF_HELMFILES_REF})"
+rm -rf "${DPF_HELMFILES_DIR}"
+mkdir -p "$(dirname "${DPF_HELMFILES_DIR}")"
+mv "${tmp}/${DPF_HELM_CHART}/dev/helmfiles" "${DPF_HELMFILES_DIR}"
+
+echo "DPF helmfiles ready at ${DPF_HELMFILES_DIR} (chart ${DPF_HELM_CHART} ${DPF_HELM_VERSION})"
