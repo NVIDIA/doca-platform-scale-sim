@@ -32,6 +32,12 @@ YEAR ?= $(shell date +%Y)
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= docker
 
+# GO_VERSION is the go version used for go commands in this makefile
+GO_VERSION ?= $(shell awk '/^toolchain /{sub(/^go/, "", $$2); v=$$2} /^go /{if (!v) v=$$2} END{print v}' go.mod)
+GOTOOLCHAIN ?= go$(GO_VERSION)+auto
+# GO runs the go command with that toolchain. Use it instead of a bare go.
+GO ?= GOTOOLCHAIN=$(GOTOOLCHAIN) go
+
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
 SHELL = /usr/bin/env bash -o pipefail
@@ -69,32 +75,32 @@ generate: controller-gen ## Generate DeepCopy, DeepCopyInto, and DeepCopyObject 
 
 .PHONY: generate-modules
 generate-modules: ## Run go mod tidy to update go modules.
-	go mod tidy
+	$(GO) mod tidy
 
 .PHONY: generate-third-party-notices
 generate-third-party-notices: go-licenses ## Regenerate the Go module licenses in THIRD_PARTY_NOTICES.md.
-	GO_LICENSES="$(GO_LICENSES)" ./hack/third-party-notices.sh
+	GOTOOLCHAIN=$(GOTOOLCHAIN) GO_LICENSES="$(GO_LICENSES)" ./hack/third-party-notices.sh
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
-	go fmt ./...
+	$(GO) fmt ./...
 
 .PHONY: vet
 vet: ## Run go vet against code.
-	go vet ./...
+	$(GO) vet ./...
 
 # GO_TEST_ARGS defines additional go test arguments. linkmode=internal links
 # with the Go linker, which avoids the macOS linker's "malformed LC_DYSYMTAB"
 # warnings under -race; see https://github.com/golang/go/issues/61229.
 GO_TEST_ARGS ?= -race -ldflags=-linkmode=internal
-TESTPKGS ?= $$(go list ./... | grep -v -e /e2e -e /test/consistency)
+TESTPKGS ?= $$($(GO) list ./... | grep -v -e /e2e -e /test/consistency)
 
 .PHONY: test
 test: setup-envtest ## Run the unit and envtest tests. `make verify` checks the generated files.
 	# The consistency package asserts facts about files the go test cache does
 	# not track, so a cached pass would survive a drift it exists to catch.
-	go test -count=1 ./test/consistency/
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $(TESTPKGS) $(GO_TEST_ARGS) -coverprofile cover.out
+	$(GO) test -count=1 ./test/consistency/
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" $(GO) test $(TESTPKGS) $(GO_TEST_ARGS) -coverprofile cover.out
 
 # e2e uses a local Kind cluster and DPF prerequisite charts from
 # https://github.com/NVIDIA/doca-platform/tree/public-release-v26.8
@@ -213,7 +219,7 @@ test-e2e-run: check-e2e-host setup-test-e2e deploy-e2e-dpf deploy-e2e-kubevirt d
 	$(KUBECTL) label --overwrite ns simfleet-controller-system pod-security.kubernetes.io/enforce=restricted
 	$(MAKE) deploy IMG=$(E2E_IMG)
 	$(KUBECTL) wait --for=condition=Available deployment -l control-plane=controller-manager -n simfleet-controller-system --timeout=180s
-	PATH="$(LOCALBIN):$(PATH)" go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout $(E2E_TEST_TIMEOUT)
+	PATH="$(LOCALBIN):$(PATH)" $(GO) test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout $(E2E_TEST_TIMEOUT)
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
@@ -306,11 +312,11 @@ commit-check: conform ## Run conform to validate commit messages against .confor
 
 .PHONY: dpuagent-build
 dpuagent-build: ## Build pinned mock-dpuagent binary into bin/mock-dpuagent.
-	DPUAGENT_OUT="$(E2E_DPUAGENT_BIN)" "$(CURDIR)/hack/dpuagent/build.sh"
+	GOTOOLCHAIN=$(GOTOOLCHAIN) DPUAGENT_OUT="$(E2E_DPUAGENT_BIN)" "$(CURDIR)/hack/dpuagent/build.sh"
 
 .PHONY: dpuagent-build-test
 dpuagent-build-test: ## Run dpuagent build contract test.
-	bash "$(CURDIR)/hack/dpuagent/build_test.sh"
+	GOTOOLCHAIN=$(GOTOOLCHAIN) bash "$(CURDIR)/hack/dpuagent/build_test.sh"
 
 .PHONY: test-scripts
 test-scripts: dpuagent-build-test ## Run the shell contract tests for the hack, node image and scenario scripts.
@@ -320,11 +326,11 @@ test-scripts: dpuagent-build-test ## Run the shell contract tests for the hack, 
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
-	go build -o bin/manager cmd/main.go
+	$(GO) build -o bin/manager cmd/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go
+	$(GO) run ./cmd/main.go
 
 # Build flags to reduce binary size:
 # GO_LDFLAGS:
@@ -338,13 +344,12 @@ GO_LDFLAGS ?= -s -w -extldflags '-static'
 #  -trimpath: removes file system paths from the binary
 GO_GCFLAGS ?= -trimpath
 
-GO_VERSION ?= $(shell awk '/^go /{print $$2}' go.mod)
 BUILD_IMAGE ?= docker.io/library/golang:$(GO_VERSION)
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 BASE_IMAGE ?= gcr.io/distroless/static:nonroot
 
-ARCH ?= $(shell go env GOARCH)
+ARCH ?= $(shell $(GO) env GOARCH)
 # PLATFORMS are the platforms docker-buildx builds and pushes the manager image for.
 PLATFORMS ?= linux/amd64,linux/arm64
 
@@ -432,6 +437,11 @@ LOCALBIN ?= $(shell pwd)/bin
 $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
+# Tools built with go live in a directory named after the full Go version
+LOCALBIN_GO ?= $(LOCALBIN)/go$(GO_VERSION)
+$(LOCALBIN_GO):
+	mkdir -p "$(LOCALBIN_GO)"
+
 ## Tool Binaries
 # Each binary is named after its version, so bumping a version names a file
 # that does not exist yet and make installs it.
@@ -439,13 +449,13 @@ KUBECTL ?= kubectl
 KIND ?= $(LOCALBIN)/kind-$(KIND_VERSION)
 HELM ?= $(LOCALBIN)/helm-$(HELM_VERSION)
 HELMFILE ?= $(LOCALBIN)/helmfile-$(HELMFILE_VERSION)
-CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
-ENVTEST ?= $(LOCALBIN)/setup-envtest-$(ENVTEST_VERSION)
-GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
-HELM_DOCS ?= $(LOCALBIN)/helm-docs-$(HELM_DOCS_VERSION)
-SHFMT ?= $(LOCALBIN)/shfmt-$(SHFMT_VERSION)
-CONFORM ?= $(LOCALBIN)/conform-$(CONFORM_VERSION)
-GO_LICENSES ?= $(LOCALBIN)/go-licenses-$(GO_LICENSES_VERSION)
+CONTROLLER_GEN ?= $(LOCALBIN_GO)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
+ENVTEST ?= $(LOCALBIN_GO)/setup-envtest-$(ENVTEST_VERSION)
+GOLANGCI_LINT ?= $(LOCALBIN_GO)/golangci-lint-$(GOLANGCI_LINT_VERSION)
+HELM_DOCS ?= $(LOCALBIN_GO)/helm-docs-$(HELM_DOCS_VERSION)
+SHFMT ?= $(LOCALBIN_GO)/shfmt-$(SHFMT_VERSION)
+CONFORM ?= $(LOCALBIN_GO)/conform-$(CONFORM_VERSION)
+GO_LICENSES ?= $(LOCALBIN_GO)/go-licenses-$(GO_LICENSES_VERSION)
 
 TOOL_OS ?= $(shell uname -s | tr A-Z a-z)
 TOOL_ARCH ?= $(shell uname -m)
@@ -472,7 +482,7 @@ GO_LICENSES_VERSION ?= v2.0.1
 # Defined before its first use: ENVTEST names a rule target, and make expands
 # rule targets while it parses.
 define gomodver
-$(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
+$(shell $(GO) list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
 endef
 
 #ENVTEST_VERSION is the controller-runtime version to use for setup-envtest, derived from go.mod
@@ -525,31 +535,32 @@ helm-git: helm ## Install the helm-git plugin if necessary.
 
 .PHONY: helm-docs
 helm-docs: $(HELM_DOCS) ## Download helm-docs locally if necessary.
-$(HELM_DOCS): | $(LOCALBIN)
+$(HELM_DOCS): | $(LOCALBIN_GO)
 	$(call go-install-tool,$(HELM_DOCS),github.com/norwoodj/helm-docs/cmd/helm-docs,$(HELM_DOCS_VERSION))
 
 .PHONY: shfmt
 shfmt: $(SHFMT) ## Download shfmt locally if necessary.
-$(SHFMT): | $(LOCALBIN)
+$(SHFMT): | $(LOCALBIN_GO)
 	$(call go-install-tool,$(SHFMT),mvdan.cc/sh/v3/cmd/shfmt,$(SHFMT_VERSION))
 
 .PHONY: conform
 conform: $(CONFORM) ## Download conform locally if necessary.
-$(CONFORM): | $(LOCALBIN)
+$(CONFORM): | $(LOCALBIN_GO)
 	$(call go-install-tool,$(CONFORM),github.com/siderolabs/conform/cmd/conform,$(CONFORM_VERSION))
 
 .PHONY: go-licenses
 go-licenses: $(GO_LICENSES) ## Download go-licenses locally if necessary.
 # Not go-install-tool: the module path ends in /v2, which is not the binary's
-# name. Built with the local toolchain because hack/third-party-notices.sh
-# scans with it, and go-licenses only recognizes its own GOROOT's packages.
-$(GO_LICENSES): | $(LOCALBIN)
-	GOTOOLCHAIN=local GOBIN="$(LOCALBIN)" go install github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION)
-	mv "$(LOCALBIN)/go-licenses" "$(GO_LICENSES)"
+# name. Built with GOTOOLCHAIN because hack/third-party-notices.sh
+# scans with the same one, and go-licenses only recognizes its own GOROOT's
+# packages.
+$(GO_LICENSES): | $(LOCALBIN_GO)
+	GOBIN="$(LOCALBIN_GO)" $(GO) install github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION)
+	mv "$(LOCALBIN_GO)/go-licenses" "$(GO_LICENSES)"
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
-$(CONTROLLER_GEN): | $(LOCALBIN)
+$(CONTROLLER_GEN): | $(LOCALBIN_GO)
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
 
 .PHONY: setup-envtest
@@ -562,18 +573,13 @@ setup-envtest: envtest ## Download the binaries required for ENVTEST in the loca
 
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
-$(ENVTEST): | $(LOCALBIN)
+$(ENVTEST): | $(LOCALBIN_GO)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
-$(GOLANGCI_LINT): | $(LOCALBIN)
+$(GOLANGCI_LINT): | $(LOCALBIN_GO)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
-	@test -f .custom-gcl.yml && { \
-		echo "Building custom golangci-lint with plugins..." && \
-		$(GOLANGCI_LINT) custom --destination $(LOCALBIN) --name golangci-lint-custom && \
-		mv -f $(LOCALBIN)/golangci-lint-custom $(GOLANGCI_LINT); \
-	} || true
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary, including the version
@@ -584,7 +590,7 @@ define go-install-tool
 set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
-GOBIN="$(LOCALBIN)" go install $${package} ;\
-mv "$(LOCALBIN)/$$(basename "$(2)")" "$(1)" ;\
+GOBIN="$(LOCALBIN_GO)" $(GO) install $${package} ;\
+mv "$(LOCALBIN_GO)/$$(basename "$(2)")" "$(1)" ;\
 }
 endef

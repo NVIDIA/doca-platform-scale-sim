@@ -2,6 +2,8 @@ module github.com/NVIDIA/doca-platform-scale-sim
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	github.com/go-logr/logr v1.4.4
 	github.com/nvidia/doca-platform v0.1.0-latest-stable.0.20261029020030-39ada4c8de47
