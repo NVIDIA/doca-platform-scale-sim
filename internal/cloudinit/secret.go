@@ -162,10 +162,6 @@ write_files:
 // hold this identity before DPF creates the DPU that carries it. The join
 // helper reads DPU_NAME to build the join Secret name its credential allows.
 func dpuIdentityContent(fleet *scalev1alpha1.SimFleet, ordinal int) string {
-	ref := scalev1alpha1.DPUClusterReference{}
-	if fleet.Spec.Bootstrap != nil {
-		ref = fleet.Spec.Bootstrap.DPUClusterRef
-	}
 	identityLines := []string{
 		fmt.Sprintf("DPU_NAME=%s", naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal)),
 		fmt.Sprintf("DPU_NAMESPACE=%s", fleet.Namespace),
@@ -173,8 +169,6 @@ func dpuIdentityContent(fleet *scalev1alpha1.SimFleet, ordinal int) string {
 			fleet.Name, naming.HostIndex(ordinal, fleet.Spec.DevicesPerDPUNode),
 		)),
 		fmt.Sprintf("DPU_DEVICE_NAME=%s", naming.DeviceName(fleet.Name, ordinal)),
-		fmt.Sprintf("DPU_CLUSTER_NAME=%s", ref.Name),
-		fmt.Sprintf("DPU_CLUSTER_NAMESPACE=%s", ref.Namespace),
 	}
 	return strings.Join(identityLines, "\n") + "\n"
 }

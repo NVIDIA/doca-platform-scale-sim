@@ -59,29 +59,6 @@ spec:
           spec:
             description: spec defines the desired state of SimFleet
             properties:
-              bootstrap:
-                description: |-
-                  BootstrapSpec records the DPUCluster the fleet's guests are expected to
-                  join. The controller does not read or contact that cluster; it writes the
-                  reference into each guest's identity file. The cluster a guest joins is
-                  decided by the join Secret DPF creates for its DPU.
-                properties:
-                  dpuClusterRef:
-                    description: DPUClusterReference names a DPF DPUCluster.
-                    properties:
-                      name:
-                        minLength: 1
-                        type: string
-                      namespace:
-                        minLength: 1
-                        type: string
-                    required:
-                    - name
-                    - namespace
-                    type: object
-                required:
-                - dpuClusterRef
-                type: object
               deviceSelectionLabels:
                 additionalProperties:
                   type: string

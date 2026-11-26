@@ -22,7 +22,8 @@
 # Streamed over SSH, the script applies its inline copy of
 # passthrough-simfleet.yaml, so the manifest does not need to be on the host.
 #
-# Override DPU_CLUSTER_NAME if the Kamaji DPUCluster is not dpu-cplane-tenant1.
+# DPU_CLUSTER_NAME and DPU_CLUSTER_NS only select the DPUCluster this script
+# prints at the end; the SimFleet does not reference it.
 # Override FLEET_ID to install more than one fleet in the same namespace.
 
 set -euo pipefail
@@ -64,8 +65,7 @@ fi
 
 render_manifest() {
 	awk -v image="${VM_IMAGE}" -v bfb_url="${BFB_URL}" -v fleet_id="${FLEET_ID}" \
-		-v replicas="${REPLICAS}" \
-		-v cluster_name="${DPU_CLUSTER_NAME}" -v cluster_ns="${DPU_CLUSTER_NS}" '
+		-v replicas="${REPLICAS}" '
 		{
 			lines[NR] = $0
 		}
@@ -81,22 +81,13 @@ render_manifest() {
 			lines[NR] = "  replicas: " replicas
 			replicas_replacements++
 		}
-		$0 == "      name: dpu-cplane-tenant1" {
-			lines[NR] = "      name: " cluster_name
-			cluster_name_replacements++
-		}
-		$0 == "      namespace: dpu-cplane-tenant1" {
-			lines[NR] = "      namespace: " cluster_ns
-			cluster_ns_replacements++
-		}
 		{
 			n = gsub("set-FLEET_ID", fleet_id, lines[NR])
 			fleet_replacements += n
 		}
 		END {
 			if (image_replacements != 1 || bfb_replacements != 1 || fleet_replacements != 4 ||
-				replicas_replacements != 1 || cluster_name_replacements != 1 ||
-				cluster_ns_replacements != 1) {
+				replicas_replacements != 1) {
 				exit 1
 			}
 			for (line = 1; line <= NR; line++) {
@@ -344,14 +335,6 @@ spec:
   devicesPerDPUNode: 1
   deviceSelectionLabels:
     scale.dpu.nvidia.com/pool: set-FLEET_ID
-  bootstrap:
-    # DPF's Kamaji cluster manager keeps the DPUCluster and its admin kubeconfig
-    # Secret in the tenant namespace, not in dpf-operator-system.
-    # install-passthrough-simfleet.sh renders REPLICAS, DPU_CLUSTER_NAME and
-    # DPU_CLUSTER_NS over replicas and this reference.
-    dpuClusterRef:
-      name: dpu-cplane-tenant1
-      namespace: dpu-cplane-tenant1
   virtualMachineTemplate:
     image: example.invalid/simfleet-node:set-VM_IMAGE
     runStrategy: Always

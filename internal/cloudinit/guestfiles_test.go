@@ -29,9 +29,6 @@ import (
 var _ = Describe("GuestFiles", func() {
 	It("returns the identity, configuration and management kubeconfig for an enabled guest", func() {
 		fleet := fleetWith(nil)
-		fleet.Spec.Bootstrap = &scalev1alpha1.BootstrapSpec{
-			DPUClusterRef: scalev1alpha1.DPUClusterReference{Name: "tenant1", Namespace: "dpf-ns"},
-		}
 		const ordinal = 12
 		kubeconfig := []byte("kubeconfig-body")
 

@@ -8,10 +8,6 @@ spec:
   devicesPerDPUNode: 1
   deviceSelectionLabels:
     scale.dpu.nvidia.com/pool: e2e
-  bootstrap:
-    dpuClusterRef:
-      name: e2e-tenant
-      namespace: dpf-operator-system
   # Explicit so the guest path cannot silently fall back to agent-disabled
   # identity-only cloud-init if CRD defaulting is skipped.
   dpuAgent:

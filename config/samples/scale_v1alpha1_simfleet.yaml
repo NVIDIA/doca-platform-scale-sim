@@ -8,10 +8,6 @@ spec:
   devicesPerDPUNode: 10
   deviceSelectionLabels:
     scale.dpu.nvidia.com/pool: scale-3000
-  bootstrap:
-    dpuClusterRef:
-      name: tenant1
-      namespace: dpf-operator-system
   # Illustrative only: not pullable until bootstrap Secrets and a real image are provided.
   virtualMachineTemplate:
     image: registry.example.com/simfleet-node@sha256:0000000000000000000000000000000000000000000000000000000000000000

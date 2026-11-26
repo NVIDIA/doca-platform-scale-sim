@@ -214,14 +214,6 @@ spec:
   devicesPerDPUNode: 1
   deviceSelectionLabels:
     scale.dpu.nvidia.com/pool: set-FLEET_ID
-  bootstrap:
-    # DPF's Kamaji cluster manager keeps the DPUCluster and its admin kubeconfig
-    # Secret in the tenant namespace, not in dpf-operator-system.
-    # install-passthrough-simfleet.sh renders REPLICAS, DPU_CLUSTER_NAME and
-    # DPU_CLUSTER_NS over replicas and this reference.
-    dpuClusterRef:
-      name: dpu-cplane-tenant1
-      namespace: dpu-cplane-tenant1
   virtualMachineTemplate:
     image: example.invalid/simfleet-node:set-VM_IMAGE
     runStrategy: Always
