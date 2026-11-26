@@ -1514,6 +1514,14 @@ func (h *instanceHarness) reportPod(address string, ready bool) {
 	Expect(h.client.Status().Update(context.Background(), guest)).To(Succeed(), "update Pod status")
 }
 
+// setPodPhase stands in for the kubelet reporting the Pod's phase.
+func (h *instanceHarness) setPodPhase(phase corev1.PodPhase) {
+	GinkgoHelper()
+	guest := h.guestPod()
+	guest.Status.Phase = phase
+	Expect(h.client.Status().Update(context.Background(), guest)).To(Succeed(), "update Pod status")
+}
+
 func ownedByInstance(fleet *scalev1alpha1.SimFleet) []metav1.OwnerReference {
 	instance := newInstanceFixture(fleet, instanceOrdinal)
 	return []metav1.OwnerReference{{
@@ -1633,6 +1641,42 @@ var _ = Describe("SimInstance reconcile of a pod fleet (fake client)", func() {
 		h.reconcile()
 		requireCondition(h.current(), scalev1alpha1.SimInstanceGuestReady, metav1.ConditionTrue, "Ready")
 	})
+
+	// Nothing is recorded in status.observedUIDs until the instance first
+	// reaches Ready, so detectDrift has no UID to compare during the
+	// provisioning window. A Pod that ends in it must still be replaced.
+	DescribeTable("fails the instance when the Pod ends before the instance first reached Ready",
+		func(phase corev1.PodPhase) {
+			h := newPodInstanceHarness(podInstanceFleet())
+			h.reconcile()
+			Expect(h.current().Status.ObservedUIDs).To(Equal(scalev1alpha1.ObservedUIDs{}),
+				"the instance must not have recorded any UID yet")
+
+			h.setPodPhase(phase)
+			h.reconcile()
+
+			Expect(h.current().Status.Phase).To(Equal(scalev1alpha1.SimInstanceFailed))
+			Expect(h.current().Status.FailureReason).To(Equal("PodTerminated"))
+		},
+		Entry("a Failed Pod", corev1.PodFailed),
+		Entry("a Succeeded Pod", corev1.PodSucceeded),
+	)
+
+	DescribeTable("keeps waiting for a Pod that has not ended",
+		func(phase corev1.PodPhase) {
+			h := newPodInstanceHarness(podInstanceFleet())
+			h.reconcile()
+
+			h.setPodPhase(phase)
+			h.reconcile()
+
+			Expect(h.current().Status.Phase).To(Equal(scalev1alpha1.SimInstanceProvisioning))
+			Expect(h.current().Status.FailureReason).To(BeEmpty())
+			requireCondition(h.current(), scalev1alpha1.SimInstanceGuestReady, metav1.ConditionFalse, "WaitingForPod")
+		},
+		Entry("a Pending Pod", corev1.PodPending),
+		Entry("a Running Pod", corev1.PodRunning),
+	)
 
 	It("publishes the Pod address as soon as it has an IPv4, before the Pod is Ready", func() {
 		h := newPodInstanceHarness(podInstanceFleet())

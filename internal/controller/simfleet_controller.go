@@ -184,7 +184,7 @@ func aggregateStatus(
 	admitted := status.AdmittedReplicas
 	templateErr := guestTemplateError(fleet, kubeVirtInstalled)
 
-	var created, guestReady, provisioned, failed int
+	var created, guestReadyInstances, provisioned, failed int
 	observation := dpuObservation{}
 	bootstrap := bootstrapOutcome{cloudInit: map[int]struct{}{}, err: templateErr}
 	for _, ordinal := range sortedOrdinals(instances) {
@@ -197,7 +197,7 @@ func aggregateStatus(
 			created++
 		}
 		if !deleting && instanceConditionTrue(instance, scalev1alpha1.SimInstanceGuestReady) {
-			guestReady++
+			guestReadyInstances++
 		}
 		if !deleting && instanceConditionTrue(instance, scalev1alpha1.SimInstanceDPUProvisioned) {
 			provisioned++
@@ -223,7 +223,7 @@ func aggregateStatus(
 
 	status.ObservedGeneration = fleet.Generation
 	status.CreatedInstances = created
-	status.GuestReadyInstances = guestReady
+	status.GuestReadyInstances = guestReadyInstances
 	status.ProvisionedInstances = provisioned
 	status.FailedInstances = failed
 	status.DPUNodes = dpuNodes
@@ -233,7 +233,7 @@ func aggregateStatus(
 	meta.SetStatusCondition(&status.Conditions, dpusReconciledCondition(fleet, observation))
 	meta.SetStatusCondition(&status.Conditions, bootstrapReconciledCondition(fleet, bootstrap, replicas))
 	meta.SetStatusCondition(&status.Conditions,
-		guestsReadyCondition(fleet, created, guestReady, replicas, templateErr))
+		guestsReadyCondition(fleet, created, guestReadyInstances, replicas, templateErr))
 	return status
 }
 
@@ -392,20 +392,23 @@ func bootstrapReconciledCondition(
 	return condition
 }
 
+// guestsReadyCondition reports whether the guest of every desired instance is
+// ready. The counts are SimInstances: createdInstances have all their
+// children, guestReadyInstances have a ready guest.
 func guestsReadyCondition(
 	fleet *scalev1alpha1.SimFleet,
-	guestCount int,
-	guestReady int,
-	desiredGuests int,
-	guestErr error,
+	createdInstances int,
+	guestReadyInstances int,
+	desiredInstances int,
+	templateErr error,
 ) metav1.Condition {
-	if guestErr != nil {
+	if templateErr != nil {
 		return metav1.Condition{
 			Type:               scalev1alpha1.ConditionGuestsReady,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: fleet.Generation,
-			Reason:             conditionReason(guestErr),
-			Message:            guestErr.Error(),
+			Reason:             conditionReason(templateErr),
+			Message:            templateErr.Error(),
 		}
 	}
 	condition := metav1.Condition{
@@ -413,22 +416,22 @@ func guestsReadyCondition(
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: fleet.Generation,
 		Reason:             "Progressing",
-		Message:            fmt.Sprintf("Created %d of %d desired guests", guestCount, desiredGuests),
+		Message:            fmt.Sprintf("Created %d of %d desired instances", createdInstances, desiredInstances),
 	}
 	switch {
-	case !fleetBootsGuests(fleet) || desiredGuests == 0:
+	case !fleetBootsGuests(fleet) || desiredInstances == 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = "Ready"
 		condition.Message = "No guests are required"
-	case guestCount == desiredGuests && guestReady == guestCount:
+	case createdInstances == desiredInstances && guestReadyInstances == createdInstances:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = "Ready"
-		condition.Message = "All desired guests are ready"
-	case guestCount < desiredGuests:
+		condition.Message = "Every desired instance has a ready guest"
+	case createdInstances < desiredInstances:
 		condition.Reason = "Progressing"
 	default:
 		condition.Reason = "WaitingForGuests"
-		condition.Message = fmt.Sprintf("%d/%d guests are ready", guestReady, desiredGuests)
+		condition.Message = fmt.Sprintf("%d/%d instances have a ready guest", guestReadyInstances, desiredInstances)
 	}
 	return condition
 }

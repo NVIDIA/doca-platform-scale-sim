@@ -255,16 +255,22 @@ var _ = Describe("SimFleet API types", func() {
 			Expect(resources.Properties["requests"].Default).To(BeNil())
 		})
 
-		It("makes the two templates mutually exclusive and not switchable", func() {
+		It("makes the two templates mutually exclusive and, once set, not removable", func() {
 			spec := simFleetSpecSchema()
 			Expect(hasValidationRule(spec.XValidations,
 				"!(has(self.virtualMachineTemplate) && has(self.podTemplate))",
 				"virtualMachineTemplate and podTemplate are mutually exclusive")).To(BeTrue(),
 				"spec schema missing the mutual exclusion rule")
+			// Removing a template does not delete its guests, so a template that
+			// could be removed could be replaced by the other kind, in two updates.
 			Expect(hasValidationRule(spec.XValidations,
-				"(!has(oldSelf.virtualMachineTemplate) || !has(self.podTemplate)) && (!has(oldSelf.podTemplate) || !has(self.virtualMachineTemplate))",
-				"a fleet cannot switch between virtualMachineTemplate and podTemplate")).To(BeTrue(),
-				"spec schema missing the no-switch rule")
+				"!has(oldSelf.virtualMachineTemplate) || has(self.virtualMachineTemplate)",
+				"virtualMachineTemplate cannot be removed once set")).To(BeTrue(),
+				"spec schema missing the virtualMachineTemplate no-removal rule")
+			Expect(hasValidationRule(spec.XValidations,
+				"!has(oldSelf.podTemplate) || has(self.podTemplate)",
+				"podTemplate cannot be removed once set")).To(BeTrue(),
+				"spec schema missing the podTemplate no-removal rule")
 			Expect(hasValidationRule(spec.XValidations, dpuAgentImmutableRule, "spec.dpuAgent is immutable")).To(BeTrue(),
 				"the dpuAgent immutability rule must remain")
 		})

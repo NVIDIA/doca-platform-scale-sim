@@ -132,23 +132,21 @@ func DesiredPod(fleet *scalev1alpha1.SimFleet, ordinal int) *corev1.Pod {
 
 	// Kubernetes items belong to the volume, so the two directories the guest
 	// reads need two volumes of the one Secret.
+	secretName := naming.GuestSecretName(fleet.Name, ordinal)
+	mounts = append(mounts, corev1.VolumeMount{Name: "guest-dpf-sim", MountPath: identityDir, ReadOnly: true})
+
 	var probe *corev1.Probe
-	agentEnabled := dpuagent.Enabled(fleet)
-	if agentEnabled {
+	if dpuagent.Enabled(fleet) {
 		identityItems = append(identityItems,
 			corev1.KeyToPath{Key: cloudinit.KubeconfigFileName, Path: cloudinit.KubeconfigFileName})
 		probe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
 			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(ReadinessPort)},
 		}}
-	}
-	secretName := naming.GuestSecretName(fleet.Name, ordinal)
-	mounts = append(mounts, corev1.VolumeMount{Name: "guest-dpf-sim", MountPath: identityDir, ReadOnly: true})
-	volumes = append(volumes, secretVolume("guest-dpf-sim", secretName, identityItems))
-	if agentEnabled {
 		mounts = append(mounts, corev1.VolumeMount{Name: "guest-mock-dpuagent", MountPath: agentDir, ReadOnly: true})
 		volumes = append(volumes, secretVolume("guest-mock-dpuagent", secretName,
 			[]corev1.KeyToPath{{Key: cloudinit.ConfigFileName, Path: cloudinit.ConfigFileName}}))
 	}
+	volumes = append(volumes, secretVolume("guest-dpf-sim", secretName, identityItems))
 
 	return &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},

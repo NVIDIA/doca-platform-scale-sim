@@ -28,7 +28,6 @@ import (
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/component-base/logs"
 	logsv1 "k8s.io/component-base/logs/api/v1"
@@ -42,7 +41,6 @@ import (
 	scalev1alpha1 "github.com/NVIDIA/doca-platform-scale-sim/api/v1alpha1"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/controller"
 	"github.com/NVIDIA/doca-platform-scale-sim/internal/dpuagent"
-	"github.com/NVIDIA/doca-platform-scale-sim/internal/kubevirt"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -64,13 +62,17 @@ func init() {
 
 // nolint:gocyclo
 func main() {
-	var metricsAddr string
-	var enableLeaderElection bool
-	var probeAddr string
-	var secureMetrics bool
-	var enableHTTP2 bool
-	var simFleetConcurrency, simInstanceConcurrency int
-	var tlsOpts []func(*tls.Config)
+	var (
+		metricsAddr            string
+		enableLeaderElection   bool
+		probeAddr              string
+		secureMetrics          bool
+		enableHTTP2            bool
+		enableKubeVirt         bool
+		simFleetConcurrency    int
+		simInstanceConcurrency int
+		tlsOpts                []func(*tls.Config)
+	)
 	fs.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	fs.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -81,6 +83,10 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	fs.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics server")
+	fs.BoolVar(&enableKubeVirt, "enable-kubevirt", true,
+		"Whether the cluster runs KubeVirt. Set it to false on a cluster without KubeVirt: "+
+			"fleets with a podTemplate run, and fleets with a virtualMachineTemplate report KubeVirtNotInstalled. "+
+			"Setting it to true on a cluster without KubeVirt stops the manager from syncing its caches.")
 	fs.IntVar(&simFleetConcurrency, "simfleet-max-concurrent-reconciles", 1,
 		"How many SimFleets are reconciled at once.")
 	fs.IntVar(&simInstanceConcurrency, "siminstance-max-concurrent-reconciles", 25,
@@ -130,19 +136,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// KubeVirt is optional: a fleet with a podTemplate runs without it. The
-	// VirtualMachine watches exist only when the cluster serves its API.
-	discoveryClient, err := discovery.NewDiscoveryClientForConfig(managementConfig)
-	if err != nil {
-		setupLog.Error(err, "Failed to create discovery client")
-		os.Exit(1)
-	}
-	kubeVirtInstalled, err := kubevirt.Installed(discoveryClient)
-	if err != nil {
-		setupLog.Error(err, "Failed to discover KubeVirt")
-		os.Exit(1)
-	}
-	setupLog.Info("Discovered KubeVirt", "installed", kubeVirtInstalled)
+	setupLog.Info("KubeVirt support", "enabled", enableKubeVirt)
 
 	mgr, err := ctrl.NewManager(managementConfig, ctrl.Options{
 		Scheme:                 scheme,
@@ -177,7 +171,7 @@ func main() {
 		Client:                  mgr.GetClient(),
 		Scheme:                  mgr.GetScheme(),
 		MaxConcurrentReconciles: simFleetConcurrency,
-		KubeVirtInstalled:       kubeVirtInstalled,
+		KubeVirtInstalled:       enableKubeVirt,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "simfleet")
 		os.Exit(1)
@@ -193,7 +187,7 @@ func main() {
 		ManagementCA:              managementCA,
 		Recorder:                  recorder,
 		MaxConcurrentReconciles:   simInstanceConcurrency,
-		KubeVirtInstalled:         kubeVirtInstalled,
+		KubeVirtInstalled:         enableKubeVirt,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "siminstance")
 		os.Exit(1)

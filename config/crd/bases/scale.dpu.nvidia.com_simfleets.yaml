@@ -685,9 +685,10 @@ spec:
                 == oldSelf.dpuAgent'
             - message: virtualMachineTemplate and podTemplate are mutually exclusive
               rule: '!(has(self.virtualMachineTemplate) && has(self.podTemplate))'
-            - message: a fleet cannot switch between virtualMachineTemplate and podTemplate
-              rule: (!has(oldSelf.virtualMachineTemplate) || !has(self.podTemplate))
-                && (!has(oldSelf.podTemplate) || !has(self.virtualMachineTemplate))
+            - message: virtualMachineTemplate cannot be removed once set
+              rule: '!has(oldSelf.virtualMachineTemplate) || has(self.virtualMachineTemplate)'
+            - message: podTemplate cannot be removed once set
+              rule: '!has(oldSelf.podTemplate) || has(self.podTemplate)'
           status:
             description: status defines the observed state of SimFleet
             properties:

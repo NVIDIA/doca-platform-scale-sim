@@ -89,12 +89,15 @@ func (r *SimInstanceReconciler) converge(
 	if children.device, err = r.ensureInstanceDevice(ctx, fleet, instance); err != nil {
 		return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceDeviceCreated, err)
 	}
-	if fleet.Spec.PodTemplate != nil {
+	switch instanceGuestOf(fleet) {
+	case instanceGuestPod:
 		children.pod, err = r.ensureInstancePod(ctx, fleet, instance, guestSecretReady, children.device)
 		if err != nil {
 			return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, err)
 		}
-	} else {
+	case instanceGuestVirtualMachine, instanceGuestNone:
+		// An instance that declares no guest takes this path too: it settles
+		// ChildrenCreated for a nil template once the device is in place.
 		children.vm, err = r.ensureInstanceVirtualMachine(ctx, fleet, instance, guestSecretReady, children.device)
 		if err != nil {
 			return children, failInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, err)
@@ -155,7 +158,7 @@ func (r *SimInstanceReconciler) ensureInstanceCredentials(
 			"NotRequired", "The DPU agent is disabled")
 	case secretReady:
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceCredentialsReady, true,
-			"Ready", "DPU agent credentials and "+guestSecretKind(fleet)+" are in place")
+			"Ready", "DPU agent credentials and guest Secret are in place")
 	default:
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceCredentialsReady, false,
 			"Progressing", "DPU agent credentials are being created")
@@ -197,17 +200,10 @@ func (r *SimInstanceReconciler) ensureInstanceAgentAccess(
 	return serviceAccount, ready, nil
 }
 
-// guestSecretKind names the Secret a guest reads its files from, for messages.
-func guestSecretKind(fleet *scalev1alpha1.SimFleet) string {
-	if fleet.Spec.PodTemplate != nil {
-		return "guest Secret"
-	}
-	return "cloud-init Secret"
-}
-
-// guestSecretName is the Secret the fleet's guests read their files from.
-func guestSecretName(fleet *scalev1alpha1.SimFleet, ordinal int) string {
-	if fleet.Spec.PodTemplate != nil {
+// instanceGuestSecretName is the Secret an instance's guest reads its files
+// from.
+func instanceGuestSecretName(fleet *scalev1alpha1.SimFleet, ordinal int) string {
+	if instanceGuestOf(fleet) == instanceGuestPod {
 		return naming.GuestSecretName(fleet.Name, ordinal)
 	}
 	return naming.CloudInitSecretName(fleet.Name, ordinal)
@@ -227,7 +223,7 @@ func (r *SimInstanceReconciler) ensureInstanceGuestSecret(
 ) (bool, error) {
 	ordinal := instance.Spec.Ordinal
 	secret := &corev1.Secret{}
-	key := client.ObjectKey{Name: guestSecretName(fleet, ordinal), Namespace: fleet.Namespace}
+	key := client.ObjectKey{Name: instanceGuestSecretName(fleet, ordinal), Namespace: fleet.Namespace}
 	found, err := r.getChild(ctx, key, secret, "Secret")
 	if err == nil && !found {
 		found, err = r.getLiveChild(ctx, key, secret, "Secret")
@@ -246,10 +242,10 @@ func (r *SimInstanceReconciler) ensureInstanceGuestSecret(
 	return live != nil, err
 }
 
-// renderGuestSecret renders the Secret of the fleet's guest kind from the
+// renderGuestSecret renders the Secret an instance's guest reads, from the
 // management kubeconfig.
 func renderGuestSecret(fleet *scalev1alpha1.SimFleet, ordinal int, kubeconfig []byte) (*corev1.Secret, error) {
-	if fleet.Spec.PodTemplate != nil {
+	if instanceGuestOf(fleet) == instanceGuestPod {
 		return pod.DesiredGuestSecret(fleet, ordinal, kubeconfig)
 	}
 	return cloudinit.DesiredSecret(fleet, ordinal, kubeconfig)
@@ -320,11 +316,11 @@ func (r *SimInstanceReconciler) ensureInstanceVirtualMachine(
 	ctx context.Context,
 	fleet *scalev1alpha1.SimFleet,
 	instance *scalev1alpha1.SimInstance,
-	cloudInitReady bool,
+	guestSecretReady bool,
 	device *provisioningv1.DPUDevice,
 ) (*virtv1.VirtualMachine, error) {
-	tmpl := fleet.Spec.VirtualMachineTemplate
-	if tmpl != nil {
+	guest := instanceGuestOf(fleet)
+	if guest == instanceGuestVirtualMachine {
 		if err := r.validateGuestTemplate(fleet); err != nil {
 			return nil, err
 		}
@@ -338,13 +334,13 @@ func (r *SimInstanceReconciler) ensureInstanceVirtualMachine(
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, false,
 			"WaitingForDevice", "DPUDevice is not in place")
 		return nil, nil
-	case tmpl == nil:
+	case guest == instanceGuestNone:
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, true,
 			"Created", "Every child is in place")
 		return nil, nil
-	case !cloudInitReady:
+	case !guestSecretReady:
 		setInstanceCondition(instance, scalev1alpha1.SimInstanceChildrenCreated, false,
-			"WaitingForCloudInit", "cloud-init Secret is not in place")
+			"WaitingForCloudInit", "guest Secret is not in place")
 		return nil, nil
 	}
 	live, err := r.ensureOwnedChild(ctx, instance,
@@ -423,11 +419,12 @@ func (r *SimInstanceReconciler) getInstanceVMI(
 	return vmi, nil
 }
 
-// guestBelongsToInstance checks the whole ownership chain of a guest: the
-// VMI must be controlled by this instance's VirtualMachine, by name and UID,
-// and that VirtualMachine by this instance. Its address becomes the Redfish
-// endpoint DPF authenticates against, so a copied name or label is not enough.
-func guestBelongsToInstance(
+// virtualMachineBelongsToInstance checks the whole ownership chain of a
+// VirtualMachine guest: the VMI must be controlled by this instance's
+// VirtualMachine, by name and UID, and that VirtualMachine by this instance.
+// Its address becomes the Redfish endpoint DPF authenticates against, so a
+// copied name or label is not enough.
+func virtualMachineBelongsToInstance(
 	instance *scalev1alpha1.SimInstance,
 	vm *virtv1.VirtualMachine,
 	vmi *virtv1.VirtualMachineInstance,
@@ -468,14 +465,14 @@ func (r *SimInstanceReconciler) ensureInstanceBMCIP(
 	}
 	log := logf.FromContext(ctx)
 	address, unreported := "", "The guest has not reported a bridged IPv4 address"
-	if fleet.Spec.PodTemplate != nil {
+	if instanceGuestOf(fleet) == instanceGuestPod {
 		unreported = "The Pod has not reported an IPv4 address"
 		if podBelongsToInstance(instance, children.pod) {
 			address = pod.PodIPv4(children.pod)
 		} else if children.pod != nil {
 			log.V(1).Info("Ignored a Pod this SimInstance does not own", "pod", children.pod.Name)
 		}
-	} else if guestBelongsToInstance(instance, children.vm, children.vmi) {
+	} else if virtualMachineBelongsToInstance(instance, children.vm, children.vmi) {
 		address = kubevirt.GuestBridgedIPv4(children.vmi)
 	} else if children.vmi != nil {
 		log.V(1).Info("Ignored a VirtualMachineInstance this SimInstance does not own",
@@ -521,12 +518,16 @@ func deviceSelectable(fleet *scalev1alpha1.SimFleet, device *provisioningv1.DPUD
 	return true
 }
 
+// observeInstanceGuest reports whether the instance's declared guest is ready.
 func observeInstanceGuest(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.SimInstance, children instanceChildren) {
-	switch {
-	case fleet.Spec.PodTemplate != nil:
+	switch instanceGuestOf(fleet) {
+	case instanceGuestPod:
 		observeInstancePod(instance, children)
-	default:
-		observeInstanceVM(fleet, instance, children)
+	case instanceGuestVirtualMachine:
+		observeInstanceVM(instance, children)
+	case instanceGuestNone:
+		setInstanceCondition(instance, scalev1alpha1.SimInstanceGuestReady, true,
+			"NotRequired", "No guest boots from this instance")
 	}
 }
 
@@ -541,14 +542,11 @@ func observeInstancePod(instance *scalev1alpha1.SimInstance, children instanceCh
 	setInstanceCondition(instance, scalev1alpha1.SimInstanceGuestReady, true, "Ready", "Pod is ready")
 }
 
-func observeInstanceVM(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.SimInstance, children instanceChildren) {
-	if fleet.Spec.VirtualMachineTemplate == nil {
-		setInstanceCondition(instance, scalev1alpha1.SimInstanceGuestReady, true,
-			"NotRequired", "No guest boots from this instance")
-		return
-	}
+// observeInstanceVM reports the guest ready once its VirtualMachine is ready,
+// or its VMI is and is proven to be this instance's.
+func observeInstanceVM(instance *scalev1alpha1.SimInstance, children instanceChildren) {
 	ready := children.vm != nil && children.vm.Status.Ready
-	if !ready && guestBelongsToInstance(instance, children.vm, children.vmi) {
+	if !ready && virtualMachineBelongsToInstance(instance, children.vm, children.vmi) {
 		status, _ := vmiReadyStatus(children.vmi)
 		ready = status == corev1.ConditionTrue
 	}

@@ -44,6 +44,7 @@ spec:
         args:
           - --leader-elect=true
           - --health-probe-bind-address=:8081
+          - --enable-kubevirt={{ .Values.controllerManager.enableKubeVirt }}
           - --simfleet-max-concurrent-reconciles={{ .Values.controllerManager.simFleetMaxConcurrentReconciles }}
           - --siminstance-max-concurrent-reconciles={{ .Values.controllerManager.simInstanceMaxConcurrentReconciles }}
         image: {{ .Values.controllerManager.image.repository }}:{{ .Values.controllerManager.image.tag

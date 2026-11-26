@@ -22,6 +22,8 @@ controllerManager:
   pullPolicy: IfNotPresent
   # -- replicas is the number of controller Pods to run. Only the leader reconciles.
   replicas: 1
+  # -- enableKubeVirt tells the controller the cluster runs KubeVirt. Set it to false on a cluster without KubeVirt, where only fleets with a podTemplate run. A true value on a cluster without KubeVirt keeps the controller from starting.
+  enableKubeVirt: true
   # -- simFleetMaxConcurrentReconciles is how many SimFleets are reconciled at once.
   simFleetMaxConcurrentReconciles: 1
   # -- simInstanceMaxConcurrentReconciles is how many SimInstances are reconciled at once. One SimInstance is one DPU ordinal.

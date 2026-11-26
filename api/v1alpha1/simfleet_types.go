@@ -350,7 +350,8 @@ type DPUAgentResponseDelayOverride struct {
 // SimFleetSpec defines the desired state of SimFleet
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.dpuAgent) ? !has(self.dpuAgent) : self.dpuAgent == oldSelf.dpuAgent",message="spec.dpuAgent is immutable"
 // +kubebuilder:validation:XValidation:rule="!(has(self.virtualMachineTemplate) && has(self.podTemplate))",message="virtualMachineTemplate and podTemplate are mutually exclusive"
-// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.virtualMachineTemplate) || !has(self.podTemplate)) && (!has(oldSelf.podTemplate) || !has(self.virtualMachineTemplate))",message="a fleet cannot switch between virtualMachineTemplate and podTemplate"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.virtualMachineTemplate) || has(self.virtualMachineTemplate)",message="virtualMachineTemplate cannot be removed once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.podTemplate) || has(self.podTemplate)",message="podTemplate cannot be removed once set"
 type SimFleetSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +required

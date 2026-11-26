@@ -58,10 +58,10 @@ type bootstrapOutcome struct {
 // management credential at all: only a fleet that boots guests with the dpuagent
 // enabled gets one.
 func credentialsEligible(fleet *scalev1alpha1.SimFleet) bool {
-	switch {
-	case fleet.Spec.PodTemplate != nil:
+	switch instanceGuestOf(fleet) {
+	case instanceGuestPod:
 		return pod.ValidateTemplate(fleet.Spec.PodTemplate) == nil && dpuagent.Enabled(fleet)
-	case fleet.Spec.VirtualMachineTemplate != nil:
+	case instanceGuestVirtualMachine:
 		return kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate) == nil && dpuagent.Enabled(fleet)
 	}
 	return false
@@ -70,20 +70,24 @@ func credentialsEligible(fleet *scalev1alpha1.SimFleet) bool {
 // fleetBootsGuests reports whether the fleet asks for a guest per ordinal,
 // as a VirtualMachine or as a Pod.
 func fleetBootsGuests(fleet *scalev1alpha1.SimFleet) bool {
-	return fleet.Spec.VirtualMachineTemplate != nil || fleet.Spec.PodTemplate != nil
+	return instanceGuestOf(fleet) != instanceGuestNone
 }
 
 // guestTemplateError is the error the fleet's guest template carries, or nil
 // when it can be rendered. A VirtualMachine template needs KubeVirt; a
-// fleet with a Pod template never does.
+// fleet with a Pod template never does, and one with no guest has no
+// template to refuse.
 func guestTemplateError(fleet *scalev1alpha1.SimFleet, kubeVirtInstalled bool) error {
-	switch {
-	case fleet.Spec.PodTemplate != nil:
+	switch instanceGuestOf(fleet) {
+	case instanceGuestPod:
 		return pod.ValidateTemplate(fleet.Spec.PodTemplate)
-	case fleet.Spec.VirtualMachineTemplate != nil && !kubeVirtInstalled:
-		return kubevirt.ErrNotInstalled
+	case instanceGuestVirtualMachine:
+		if !kubeVirtInstalled {
+			return kubevirt.ErrNotInstalled
+		}
+		return kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate)
 	}
-	return kubevirt.ValidateTemplate(fleet.Spec.VirtualMachineTemplate)
+	return nil
 }
 
 // conditionReason names the configuration a condition is blocked on, whether
