@@ -140,8 +140,8 @@ var _ = Describe("SimFleet spec.dpuAgent.bmc schema", func() {
 	})
 
 	It("enumerates override names from the mock's route table", func() {
-		Expect(scalev1alpha1.MockRedfishOperations).To(HaveLen(35),
-			"MockRedfishOperations should hold the 35 operations of the pinned mock")
+		Expect(scalev1alpha1.MockRedfishOperations).To(HaveLen(41),
+			"MockRedfishOperations should hold the 41 operations of the pinned mock")
 		got := enumStrings(delayOverrideItemSchema().Properties["name"].Enum)
 		Expect(got).To(Equal(slices.Sorted(maps.Keys(scalev1alpha1.MockRedfishOperations))),
 			"responseDelayOverrides[].name enum")

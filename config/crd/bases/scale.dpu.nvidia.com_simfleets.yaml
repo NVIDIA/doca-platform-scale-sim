@@ -188,6 +188,7 @@ spec:
                               - CertificateService.ReplaceCertificate
                               - Chassis
                               - ComputerSystem.Reset
+                              - Drive
                               - FirmwareInventory
                               - HostPrivilegeConfig
                               - HostRshim.Set
@@ -196,8 +197,13 @@ spec:
                               - Manager.ResetToDefaults
                               - Managers
                               - Mode.Set
+                              - NetworkAdapter
                               - NetworkDeviceFunction
+                              - NetworkPort
+                              - NvidiaChassis.AuxPowerReset
                               - NvidiaChassis.Reset
+                              - NvidiaUpdateService.CommitImage
+                              - Processor
                               - SELEntries
                               - SOC.ForceReset
                               - SecureBoot
@@ -230,21 +236,24 @@ spec:
                               [''GET''], ''BiosSettings'': [''PATCH''], ''CertificateService.GenerateCSR'':
                               [''POST''], ''CertificateService.ReplaceCertificate'':
                               [''POST''], ''Chassis'': [''GET''], ''ComputerSystem.Reset'':
-                              [''POST''], ''FirmwareInventory'': [''GET''], ''HostPrivilegeConfig'':
-                              [''PATCH''], ''HostRshim.Set'': [''POST''], ''Manager'':
-                              [''GET''], ''Manager.Reset'': [''POST''], ''Manager.ResetToDefaults'':
-                              [''POST''], ''Managers'': [''GET''], ''Mode.Set'': [''POST''],
-                              ''NetworkDeviceFunction'': [''GET''], ''NvidiaChassis.Reset'':
-                              [''POST''], ''SELEntries'': [''GET''], ''SOC.ForceReset'':
-                              [''POST''], ''SecureBoot'': [''GET'', ''PATCH''], ''ServerCertificate'':
-                              [''GET''], ''ServiceRoot'': [''GET''], ''System'': [''GET''],
-                              ''SystemOem'': [''GET''], ''SystemSettings'': [''GET'',
-                              ''PATCH''], ''Systems'': [''GET''], ''Task'': [''GET''],
-                              ''TruststoreCertificates'': [''DELETE'', ''GET'', ''POST''],
-                              ''UpdateMultipart'': [''POST''], ''UpdateService'':
-                              [''GET'', ''POST''], ''UpdateService.Activate'': [''POST''],
-                              ''UpdateService.SimpleUpdate'': [''POST''], ''VirtualMedia'':
-                              [''GET'', ''POST'']}[self.name])'
+                              [''POST''], ''Drive'': [''GET''], ''FirmwareInventory'':
+                              [''GET''], ''HostPrivilegeConfig'': [''PATCH''], ''HostRshim.Set'':
+                              [''POST''], ''Manager'': [''GET''], ''Manager.Reset'':
+                              [''POST''], ''Manager.ResetToDefaults'': [''POST''],
+                              ''Managers'': [''GET''], ''Mode.Set'': [''POST''], ''NetworkAdapter'':
+                              [''GET''], ''NetworkDeviceFunction'': [''GET''], ''NetworkPort'':
+                              [''GET''], ''NvidiaChassis.AuxPowerReset'': [''POST''],
+                              ''NvidiaChassis.Reset'': [''POST''], ''NvidiaUpdateService.CommitImage'':
+                              [''POST''], ''Processor'': [''GET''], ''SELEntries'':
+                              [''GET''], ''SOC.ForceReset'': [''POST''], ''SecureBoot'':
+                              [''GET'', ''PATCH''], ''ServerCertificate'': [''GET''],
+                              ''ServiceRoot'': [''GET''], ''System'': [''GET''], ''SystemOem'':
+                              [''GET''], ''SystemSettings'': [''GET'', ''PATCH''],
+                              ''Systems'': [''GET''], ''Task'': [''GET''], ''TruststoreCertificates'':
+                              [''DELETE'', ''GET'', ''POST''], ''UpdateMultipart'':
+                              [''POST''], ''UpdateService'': [''GET'', ''POST''],
+                              ''UpdateService.Activate'': [''POST''], ''UpdateService.SimpleUpdate'':
+                              [''POST''], ''VirtualMedia'': [''GET'', ''POST'']}[self.name])'
                         maxItems: 32
                         type: array
                         x-kubernetes-list-type: atomic
@@ -364,8 +373,9 @@ spec:
                         description: NodeRebootMethod defines the desired reboot method
                         properties:
                           external:
-                            description: Reboot the host via an external means, not
-                              controlled by the DPU controller.
+                            description: |-
+                              Reboot the host via an external means, not controlled by the DPU
+                              controller.
                             type: object
                           gNOI:
                             description: |-
@@ -383,9 +393,10 @@ spec:
                             type: object
                           script:
                             description: |-
-                              Reboot the host by executing a custom script. This field defined which ConfigMap store the custom script.
-                              The ConfigMap should include a pod template of Job object under the `pod-template` key.
-                              That pod template will be put in a Job object to be executed.
+                              Reboot the host by executing a custom script. This field defined which
+                              ConfigMap store the custom script. The ConfigMap should include a pod
+                              template of Job object under the `pod-template` key. That pod template
+                              will be put in a Job object to be executed.
                             properties:
                               name:
                                 minLength: 1

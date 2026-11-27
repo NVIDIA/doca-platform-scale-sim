@@ -110,7 +110,7 @@ KIND_KUBERNETES_VERSION ?= v1.36.4
 KIND_NODE_IMAGE ?= kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
 DPF_HELM_REPO ?= https://helm.ngc.nvidia.com/nvidia/doca
 DPF_HELM_CHART ?= dpf-operator
-DPF_HELM_VERSION ?= v26.8.0
+DPF_HELM_VERSION ?= v30.0.0
 DPF_HELMFILES_DIR ?= $(LOCALBIN)/dpf-helmfiles
 HELMFILE_FILE ?= $(DPF_HELMFILES_DIR)/prereqs.yaml
 
