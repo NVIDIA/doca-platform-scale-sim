@@ -62,13 +62,17 @@ func init() {
 
 // nolint:gocyclo
 func main() {
-	var metricsAddr string
-	var enableLeaderElection bool
-	var probeAddr string
-	var secureMetrics bool
-	var enableHTTP2 bool
-	var simFleetConcurrency, simInstanceConcurrency int
-	var tlsOpts []func(*tls.Config)
+	var (
+		metricsAddr            string
+		enableLeaderElection   bool
+		probeAddr              string
+		secureMetrics          bool
+		enableHTTP2            bool
+		enableKubeVirt         bool
+		simFleetConcurrency    int
+		simInstanceConcurrency int
+		tlsOpts                []func(*tls.Config)
+	)
 	fs.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	fs.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -79,6 +83,10 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	fs.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics server")
+	fs.BoolVar(&enableKubeVirt, "enable-kubevirt", true,
+		"Whether the cluster runs KubeVirt. Set it to false on a cluster without KubeVirt: "+
+			"fleets with a podTemplate run, and fleets with a virtualMachineTemplate report KubeVirtNotInstalled. "+
+			"Setting it to true on a cluster without KubeVirt stops the manager from syncing its caches.")
 	fs.IntVar(&simFleetConcurrency, "simfleet-max-concurrent-reconciles", 1,
 		"How many SimFleets are reconciled at once.")
 	fs.IntVar(&simInstanceConcurrency, "siminstance-max-concurrent-reconciles", 25,
@@ -128,6 +136,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	setupLog.Info("KubeVirt support", "enabled", enableKubeVirt)
+
 	mgr, err := ctrl.NewManager(managementConfig, ctrl.Options{
 		Scheme:                 scheme,
 		Cache:                  controller.ManagerCacheOptions(),
@@ -161,6 +171,7 @@ func main() {
 		Client:                  mgr.GetClient(),
 		Scheme:                  mgr.GetScheme(),
 		MaxConcurrentReconciles: simFleetConcurrency,
+		KubeVirtInstalled:       enableKubeVirt,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "simfleet")
 		os.Exit(1)
@@ -176,6 +187,7 @@ func main() {
 		ManagementCA:              managementCA,
 		Recorder:                  recorder,
 		MaxConcurrentReconciles:   simInstanceConcurrency,
+		KubeVirtInstalled:         enableKubeVirt,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "siminstance")
 		os.Exit(1)

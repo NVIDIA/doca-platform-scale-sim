@@ -229,6 +229,74 @@ var _ = Describe("SimFleet API types", func() {
 		}))
 	})
 
+	Describe("podTemplate", func() {
+		It("is an optional spec property that requires only image", func() {
+			spec := simFleetSpecSchema()
+			Expect(spec.Properties).To(HaveKey("podTemplate"), "spec schema missing podTemplate property")
+			Expect(spec.Required).NotTo(ContainElement("podTemplate"), "podTemplate must stay optional")
+			Expect(spec.Required).NotTo(ContainElement("virtualMachineTemplate"), "virtualMachineTemplate must stay optional")
+
+			podTemplate := spec.Properties["podTemplate"]
+			Expect(podTemplate.Required).To(Equal([]string{"image"}))
+			Expect(podTemplate.Properties).To(HaveKey("image"))
+			Expect(podTemplate.Properties["image"].MinLength).To(HaveValue(BeEquivalentTo(1)))
+			for _, field := range []string{"resources", "metadata", "nodeSelector", "tolerations"} {
+				Expect(podTemplate.Properties).To(HaveKey(field), "podTemplate.%s", field)
+			}
+		})
+
+		It("leaves resources without a schema default", func() {
+			podTemplate := simFleetSpecSchema().Properties["podTemplate"]
+			Expect(podTemplate.Properties).To(HaveKey("resources"))
+			Expect(podTemplate.Default).To(BeNil(), "a default on podTemplate would overwrite an explicit empty resources object")
+			resources := podTemplate.Properties["resources"]
+			Expect(resources.Default).To(BeNil(), "podTemplate.resources must not carry a schema default")
+			Expect(resources.Properties).To(HaveKey("requests"))
+			Expect(resources.Properties["requests"].Default).To(BeNil())
+		})
+
+		It("makes the two templates mutually exclusive and, once set, not removable", func() {
+			spec := simFleetSpecSchema()
+			Expect(hasValidationRule(spec.XValidations,
+				"!(has(self.virtualMachineTemplate) && has(self.podTemplate))",
+				"virtualMachineTemplate and podTemplate are mutually exclusive")).To(BeTrue(),
+				"spec schema missing the mutual exclusion rule")
+			// Removing a template does not delete its guests, so a template that
+			// could be removed could be replaced by the other kind, in two updates.
+			Expect(hasValidationRule(spec.XValidations,
+				"!has(oldSelf.virtualMachineTemplate) || has(self.virtualMachineTemplate)",
+				"virtualMachineTemplate cannot be removed once set")).To(BeTrue(),
+				"spec schema missing the virtualMachineTemplate no-removal rule")
+			Expect(hasValidationRule(spec.XValidations,
+				"!has(oldSelf.podTemplate) || has(self.podTemplate)",
+				"podTemplate cannot be removed once set")).To(BeTrue(),
+				"spec schema missing the podTemplate no-removal rule")
+			Expect(hasValidationRule(spec.XValidations, dpuAgentImmutableRule, "spec.dpuAgent is immutable")).To(BeTrue(),
+				"the dpuAgent immutability rule must remain")
+		})
+
+		It("does not make the template contents immutable", func() {
+			podTemplate := simFleetSpecSchema().Properties["podTemplate"]
+			Expect(podTemplate.XValidations).To(BeEmpty())
+			Expect(podTemplate.Properties["image"].XValidations).To(BeEmpty())
+		})
+
+		It("deep-copies the pod template", func() {
+			spec := scalev1alpha1.SimFleetSpec{
+				PodTemplate: &scalev1alpha1.PodTemplate{
+					Image:        "registry.example/dpu:1",
+					NodeSelector: map[string]string{"role": "dpu"},
+				},
+			}
+			copied := spec.DeepCopy()
+			Expect(copied.PodTemplate).NotTo(BeNil())
+			Expect(copied.PodTemplate.Image).To(Equal("registry.example/dpu:1"))
+			copied.PodTemplate.NodeSelector["role"] = "mutated"
+			Expect(spec.PodTemplate.NodeSelector).To(HaveKeyWithValue("role", "dpu"))
+			Expect(spec.VirtualMachineTemplate).To(BeNil())
+		})
+	})
+
 	It("defaults the dpuAgent schema and makes it immutable", func() {
 		spec := simFleetSpecSchema()
 

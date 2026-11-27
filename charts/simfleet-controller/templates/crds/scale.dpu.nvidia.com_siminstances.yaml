@@ -152,6 +152,8 @@ spec:
                     type: string
                   dpuDevice:
                     type: string
+                  pod:
+                    type: string
                   virtualMachine:
                     type: string
                   virtualMachineInstance:

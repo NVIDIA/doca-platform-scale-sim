@@ -63,6 +63,13 @@ type SimInstanceReconciler struct {
 	// ManagementCA authenticates the management API from simulated DPUs.
 	ManagementCA []byte
 
+	// KubeVirtInstalled reports whether the cluster serves KubeVirt's API.
+	// Without it the reconciler registers no VirtualMachine or
+	// VirtualMachineInstance watch and reads no KubeVirt object on any path,
+	// teardown included; a fleet with a virtualMachineTemplate then reports
+	// KubeVirtNotInstalled.
+	KubeVirtInstalled bool
+
 	// Recorder emits instance Events. A nil value skips Events.
 	Recorder events.EventRecorder
 	// Now is the teardown clock. A nil value uses time.Now.
@@ -79,6 +86,7 @@ type SimInstanceReconciler struct {
 // +kubebuilder:rbac:groups=provisioning.dpu.nvidia.com,resources=dpus,verbs=get;list;watch;delete;patch
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances,verbs=get;list;watch;delete;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
@@ -120,6 +128,20 @@ func (r *SimInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	base := instance.DeepCopy()
 	children, convergeErr := r.converge(ctx, fleet, instance)
 	setInstancePhase(fleet, instance, children)
+	if podTerminated(children.pod) {
+		// detectDrift reports this too, but only once the instance has
+		// recorded its UIDs, and those are recorded when it first reaches
+		// Ready. A Pod that ends while the DPU is still provisioning has no
+		// recorded UID, so it is caught here. The Pod is this instance's:
+		// ensureOwnedChild refuses any other.
+		instance.Status.Phase = scalev1alpha1.SimInstanceFailed
+		instance.Status.FailureReason = "PodTerminated"
+		log.Info("Failed SimInstance whose Pod ended before it was Ready", "pod", children.pod.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "SimInstanceFailed", "Converge",
+				"ordinal %d failed: %s", instance.Spec.Ordinal, instance.Status.FailureReason)
+		}
+	}
 	if errors.Is(convergeErr, ownership.ErrConflict) {
 		// The child is someone else's. It is never modified; the SimFleet
 		// reconciler replaces this instance instead.
@@ -247,10 +269,10 @@ func (r *SimInstanceReconciler) mapVMIToInstance(ctx context.Context, object cli
 // SetupWithManager sets up the controller with the Manager. The DPU
 // spec.dpuDeviceName index it reads is registered by SetupIndexes.
 func (r *SimInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&scalev1alpha1.SimInstance{}).
 		Owns(&provisioningv1.DPUDevice{}, builder.WithPredicates(inventoryChildPredicate())).
-		Owns(&virtv1.VirtualMachine{}, builder.WithPredicates(virtualMachineWatchPredicate())).
+		Owns(&corev1.Pod{}, builder.WithPredicates(podWatchPredicate())).
 		Owns(&corev1.Secret{}, builder.WithPredicates(secretWatchPredicate())).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).
@@ -261,15 +283,22 @@ func (r *SimInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(dpuWatchPredicate()),
 		).
 		Watches(
-			&virtv1.VirtualMachineInstance{},
-			handler.EnqueueRequestsFromMapFunc(r.mapVMIToInstance),
-			builder.WithPredicates(vmiWatchPredicate()),
-		).
-		Watches(
 			&scalev1alpha1.SimFleet{},
 			handler.EnqueueRequestsFromMapFunc(r.mapFleetToInstances),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
-		).
+		)
+	// An informer for a kind the cluster does not serve never syncs, so the
+	// KubeVirt watches exist only when KubeVirt does.
+	if r.KubeVirtInstalled {
+		b = b.
+			Owns(&virtv1.VirtualMachine{}, builder.WithPredicates(virtualMachineWatchPredicate())).
+			Watches(
+				&virtv1.VirtualMachineInstance{},
+				handler.EnqueueRequestsFromMapFunc(r.mapVMIToInstance),
+				builder.WithPredicates(vmiWatchPredicate()),
+			)
+	}
+	return b.
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		Named("siminstance").
 		Complete(r)
@@ -310,8 +339,8 @@ func failInstanceCondition(instance *scalev1alpha1.SimInstance, conditionType st
 }
 
 // requiredInstanceConditions are the conditions a Ready instance holds. A
-// fleet without a VM template boots no guest, so it has no VM to be ready and
-// no BMC address to make its device selectable.
+// fleet without a VM or Pod template boots no guest, so it has no guest to be
+// ready and no BMC address to make its device selectable.
 func requiredInstanceConditions(fleet *scalev1alpha1.SimFleet) []string {
 	required := []string{
 		scalev1alpha1.SimInstanceCredentialsReady,
@@ -319,7 +348,7 @@ func requiredInstanceConditions(fleet *scalev1alpha1.SimFleet) []string {
 		scalev1alpha1.SimInstanceChildrenCreated,
 		scalev1alpha1.SimInstanceDPUProvisioned,
 	}
-	if fleet.Spec.VirtualMachineTemplate != nil {
+	if fleetBootsGuests(fleet) {
 		required = append(required, scalev1alpha1.SimInstanceGuestReady, scalev1alpha1.SimInstanceSelectable)
 	}
 	return required
@@ -359,6 +388,7 @@ const (
 	teardownQuarantine        = "Quarantine"
 	teardownDeleteDPU         = "DeleteDPU"
 	teardownDeleteDPUDevice   = "DeleteDPUDevice"
+	teardownDeletePod         = "DeletePod"
 	teardownDeleteVM          = "DeleteVM"
 	teardownDeleteVMI         = "DeleteVMI"
 	teardownDeleteCredentials = "DeleteCredentials"
@@ -418,16 +448,20 @@ func (r *SimInstanceReconciler) detectDrift(
 			return "DPUReplaced", nil
 		}
 	}
-	vmName := naming.VirtualMachineName(fleet.Name, ordinal)
-	for _, child := range []struct {
+	guestName := naming.GuestName(fleet.Name, ordinal)
+	type recordedChild struct {
 		uid, name, kind string
 		obj             client.Object
-	}{
-		{recorded.DPUDevice, naming.DeviceName(fleet.Name, ordinal), "DPUDevice", &provisioningv1.DPUDevice{}},
-		{recorded.VirtualMachine, vmName, "VirtualMachine", &virtv1.VirtualMachine{}},
-		{recorded.VirtualMachineInstance, vmName, "VirtualMachineInstance", &virtv1.VirtualMachineInstance{}},
+		kubeVirt        bool
+	}
+	for _, child := range []recordedChild{
+		{recorded.DPUDevice, naming.DeviceName(fleet.Name, ordinal), "DPUDevice", &provisioningv1.DPUDevice{}, false},
+		{recorded.Pod, guestName, "Pod", &corev1.Pod{}, false},
+		{recorded.VirtualMachine, guestName, "VirtualMachine", &virtv1.VirtualMachine{}, true},
+		{recorded.VirtualMachineInstance, guestName, "VirtualMachineInstance", &virtv1.VirtualMachineInstance{}, true},
 	} {
-		if child.uid == "" {
+		// Without KubeVirt there is no API to ask about a VirtualMachine.
+		if child.uid == "" || (child.kubeVirt && !r.KubeVirtInstalled) {
 			continue
 		}
 		key := client.ObjectKey{Name: child.name, Namespace: instance.Namespace}
@@ -435,11 +469,32 @@ func (r *SimInstanceReconciler) detectDrift(
 		if err != nil {
 			return "", err
 		}
+		if !found && labelScopedCacheKind(child.obj) {
+			// The cache holds a Pod only while it carries the fleet-name
+			// label, so a miss may be a label removed from the same Pod.
+			// Converge repairs identity labels; only the API server can say
+			// the Pod is really gone or replaced.
+			found, err = r.getLiveChild(ctx, key, child.obj, child.kind)
+			if err != nil {
+				return "", err
+			}
+		}
 		if !found || string(child.obj.GetUID()) != child.uid {
 			return child.kind + "Replaced", nil
 		}
+		// Replace a Pod that ran to an end as a replaced Pod is replaced.
+		if pod, ok := child.obj.(*corev1.Pod); ok && podTerminated(pod) {
+			return "PodTerminated", nil
+		}
 	}
 	return "", nil
+}
+
+// podTerminated reports whether the Pod ran to an end. It keeps its UID and
+// never runs again, and ensureInstancePod never replaces an existing Pod, so
+// an instance would wait on it forever.
+func podTerminated(pod *corev1.Pod) bool {
+	return pod != nil && (pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded)
 }
 
 // deviceDPUExists reports whether a DPU with uid names deviceName.
@@ -459,29 +514,55 @@ func (r *SimInstanceReconciler) deviceDPUExists(ctx context.Context, namespace, 
 	return false, nil
 }
 
+// instanceGuest is the guest a SimInstance declares: the VirtualMachine or
+// the Pod its fleet asks for, which runs the instance's simulated DPU.
+type instanceGuest int
+
+const (
+	instanceGuestVirtualMachine instanceGuest = iota
+	instanceGuestPod
+	// instanceGuestNone is a fleet with neither template: its instances
+	// declare no guest.
+	instanceGuestNone
+	// instanceGuestUnknown is a fleet that no longer exists: its children are
+	// deleted by name, whichever guest they turn out to be.
+	instanceGuestUnknown
+)
+
 // teardownTarget names one ordinal's children. The fleet may already be
 // gone, so the names come from the instance's label and spec then.
 type teardownTarget struct {
-	fleet          *scalev1alpha1.SimFleet
-	namespace      string
-	deviceName     string
-	dpuName        string
-	vmName         string
-	cloudInitName  string
-	credentialName string
+	fleet      *scalev1alpha1.SimFleet
+	namespace  string
+	deviceName string
+	dpuName    string
+	// guestName names the instance's guest, whichever it is.
+	guestName string
+	// cloudInitSecretName and guestSecretName are the Secrets of a
+	// VirtualMachine guest and of a Pod guest. Both are always set, and
+	// teardown deletes whichever the instance controls, because a fleet that
+	// is gone cannot say which guest its instances declared.
+	cloudInitSecretName string
+	guestSecretName     string
+	credentialName      string
+	// instanceGuest is the guest the instance declares, or
+	// instanceGuestUnknown once the fleet is gone and cannot say.
+	instanceGuest instanceGuest
 }
 
 func newTeardownTarget(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.SimInstance) (teardownTarget, bool) {
 	ordinal := instance.Spec.Ordinal
 	if fleet != nil {
 		return teardownTarget{
-			fleet:          fleet,
-			namespace:      instance.Namespace,
-			deviceName:     naming.DeviceName(fleet.Name, ordinal),
-			dpuName:        naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal),
-			vmName:         naming.VirtualMachineName(fleet.Name, ordinal),
-			cloudInitName:  naming.CloudInitSecretName(fleet.Name, ordinal),
-			credentialName: dpuagent.CredentialName(fleet, ordinal),
+			fleet:               fleet,
+			namespace:           instance.Namespace,
+			deviceName:          naming.DeviceName(fleet.Name, ordinal),
+			dpuName:             naming.DPUName(fleet.Name, fleet.Spec.DevicesPerDPUNode, ordinal),
+			guestName:           naming.GuestName(fleet.Name, ordinal),
+			cloudInitSecretName: naming.CloudInitSecretName(fleet.Name, ordinal),
+			guestSecretName:     naming.GuestSecretName(fleet.Name, ordinal),
+			credentialName:      dpuagent.CredentialName(fleet, ordinal),
+			instanceGuest:       instanceGuestOf(fleet),
 		}, true
 	}
 	name := instance.Labels[naming.LabelFleetName]
@@ -494,13 +575,28 @@ func newTeardownTarget(fleet *scalev1alpha1.SimFleet, instance *scalev1alpha1.Si
 	}
 	dpuName := naming.DPUNameForHost(name, instance.Spec.HostIndex, ordinal)
 	return teardownTarget{
-		namespace:      instance.Namespace,
-		deviceName:     naming.DeviceName(name, ordinal),
-		dpuName:        dpuName,
-		vmName:         naming.VirtualMachineName(name, ordinal),
-		cloudInitName:  naming.CloudInitSecretName(name, ordinal),
-		credentialName: dpuName,
+		namespace:           instance.Namespace,
+		deviceName:          naming.DeviceName(name, ordinal),
+		dpuName:             dpuName,
+		guestName:           naming.GuestName(name, ordinal),
+		cloudInitSecretName: naming.CloudInitSecretName(name, ordinal),
+		guestSecretName:     naming.GuestSecretName(name, ordinal),
+		credentialName:      dpuName,
+		instanceGuest:       instanceGuestUnknown,
 	}, true
+}
+
+// instanceGuestOf is the guest the fleet's instances declare. Every decision
+// that depends on the guest goes through it, so the templates are read in one
+// place.
+func instanceGuestOf(fleet *scalev1alpha1.SimFleet) instanceGuest {
+	switch {
+	case fleet.Spec.PodTemplate != nil:
+		return instanceGuestPod
+	case fleet.Spec.VirtualMachineTemplate != nil:
+		return instanceGuestVirtualMachine
+	}
+	return instanceGuestNone
 }
 
 func (t teardownTarget) key(name string) client.ObjectKey {
@@ -517,16 +613,26 @@ type teardownStep struct {
 
 // teardownSteps are woken by the delete events of the objects they wait on,
 // except the VMI step: once its VirtualMachine is gone, mapVMIToInstance has
-// nothing to resolve the VMI through.
-func (r *SimInstanceReconciler) teardownSteps() []teardownStep {
-	return []teardownStep{
+// nothing to resolve the VMI through. A Pod guest is deleted where a
+// VirtualMachine guest has its VirtualMachine and VMI deleted, and without
+// KubeVirt there are no KubeVirt steps at all. An instance that declares no
+// guest, or whose fleet is gone, may still own either, so it gets both.
+func (r *SimInstanceReconciler) teardownSteps(instanceGuest instanceGuest) []teardownStep {
+	steps := []teardownStep{
 		{name: teardownQuarantine, run: r.quarantineInstanceDevice},
 		{name: teardownDeleteDPU, run: r.deleteInstanceDPU},
 		{name: teardownDeleteDPUDevice, run: r.deleteInstanceDevice},
-		{name: teardownDeleteVM, run: r.deleteInstanceVM},
-		{name: teardownDeleteVMI, run: r.deleteInstanceVMI, poll: true},
-		{name: teardownDeleteCredentials, run: r.deleteInstanceCredentials},
 	}
+	if instanceGuest != instanceGuestVirtualMachine {
+		steps = append(steps, teardownStep{name: teardownDeletePod, run: r.deleteInstancePod})
+	}
+	if instanceGuest != instanceGuestPod && r.KubeVirtInstalled {
+		steps = append(steps,
+			teardownStep{name: teardownDeleteVM, run: r.deleteInstanceVM},
+			teardownStep{name: teardownDeleteVMI, run: r.deleteInstanceVMI, poll: true},
+		)
+	}
+	return append(steps, teardownStep{name: teardownDeleteCredentials, run: r.deleteInstanceCredentials})
 }
 
 // teardownRequeue is when a blocked step next needs a pass that no event
@@ -559,7 +665,7 @@ func (r *SimInstanceReconciler) reconcileDelete(
 	base := instance.DeepCopy()
 	now := r.now()
 	instance.Status.Phase = scalev1alpha1.SimInstanceTerminating
-	steps := r.teardownSteps()
+	steps := r.teardownSteps(target.instanceGuest)
 	current := 0
 	if condition := meta.FindStatusCondition(instance.Status.Conditions, scalev1alpha1.SimInstanceTeardown); condition != nil {
 		for i, step := range steps {
@@ -728,13 +834,24 @@ func (r *SimInstanceReconciler) deleteInstanceDevice(
 	return r.deleteControlledChild(ctx, target, instance, &provisioningv1.DPUDevice{}, target.deviceName, "DPUDevice", now)
 }
 
+// deleteInstancePod deletes the guest Pod, only if this instance controls it.
+// The Pod's delete event wakes the instance, so the step does not poll.
+func (r *SimInstanceReconciler) deleteInstancePod(
+	ctx context.Context,
+	target teardownTarget,
+	instance *scalev1alpha1.SimInstance,
+	now time.Time,
+) (bool, error) {
+	return r.deleteControlledChild(ctx, target, instance, &corev1.Pod{}, target.guestName, "Pod", now)
+}
+
 func (r *SimInstanceReconciler) deleteInstanceVM(
 	ctx context.Context,
 	target teardownTarget,
 	instance *scalev1alpha1.SimInstance,
 	now time.Time,
 ) (bool, error) {
-	return r.deleteControlledChild(ctx, target, instance, &virtv1.VirtualMachine{}, target.vmName, "VirtualMachine", now)
+	return r.deleteControlledChild(ctx, target, instance, &virtv1.VirtualMachine{}, target.guestName, "VirtualMachine", now)
 }
 
 // deleteInstanceVMI deletes any VMI the VirtualMachine left behind. The VMI
@@ -747,7 +864,7 @@ func (r *SimInstanceReconciler) deleteInstanceVMI(
 	now time.Time,
 ) (bool, error) {
 	vm := &virtv1.VirtualMachine{}
-	found, err := r.getChild(ctx, target.key(target.vmName), vm, "VirtualMachine")
+	found, err := r.getChild(ctx, target.key(target.guestName), vm, "VirtualMachine")
 	if err != nil {
 		return false, err
 	}
@@ -755,7 +872,7 @@ func (r *SimInstanceReconciler) deleteInstanceVMI(
 		vm = nil
 	}
 	vmi := &virtv1.VirtualMachineInstance{}
-	found, err = r.getChild(ctx, target.key(target.vmName), vmi, "VirtualMachineInstance")
+	found, err = r.getChild(ctx, target.key(target.guestName), vmi, "VirtualMachineInstance")
 	if err != nil || !found {
 		return err == nil, err
 	}
@@ -773,7 +890,7 @@ func instanceOwnsVMI(
 	vmi *virtv1.VirtualMachineInstance,
 ) bool {
 	if vm != nil {
-		return guestBelongsToInstance(instance, vm, vmi)
+		return virtualMachineBelongsToInstance(instance, vm, vmi)
 	}
 	owner := metav1.GetControllerOf(vmi)
 	recorded := instance.Status.ObservedUIDs
@@ -795,7 +912,8 @@ func (r *SimInstanceReconciler) deleteInstanceCredentials(
 		obj        client.Object
 		name, kind string
 	}{
-		{&corev1.Secret{}, target.cloudInitName, "Secret"},
+		{&corev1.Secret{}, target.cloudInitSecretName, "Secret"},
+		{&corev1.Secret{}, target.guestSecretName, "Secret"},
 		{&rbacv1.RoleBinding{}, target.credentialName, "RoleBinding"},
 		{&rbacv1.Role{}, target.credentialName, "Role"},
 		{&corev1.ServiceAccount{}, target.credentialName, "ServiceAccount"},
@@ -895,7 +1013,13 @@ func stripFinalizersAndForceDelete(
 		"name", obj.GetName(),
 		"elapsed", elapsed,
 	)
-	if err := c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+	// A Pod stuck Terminating on a lost node has no finalizer to strip; only
+	// a zero grace period lets the API server remove it.
+	var deleteOpts []client.DeleteOption
+	if _, isPod := obj.(*corev1.Pod); isPod {
+		deleteOpts = append(deleteOpts, client.GracePeriodSeconds(0))
+	}
+	if err := c.Delete(ctx, obj, deleteOpts...); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete %s %q after stripping finalizers: %w", kind, obj.GetName(), err)
 	}
 	return nil
