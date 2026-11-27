@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -463,6 +464,17 @@ var _ = Describe("SimFleet", Ordered, func() {
 				expectPhaseDelaysApplied(g, naming.VirtualMachineName(fleetName, ordinal), phases)
 			}
 		}, time.Minute, 5*time.Second).Should(Succeed())
+
+		// Last on purpose: every check above is about what this controller
+		// owns, and this one is about DPF finishing the DPUs after the join.
+		By("waiting for every DPU to reach the Ready phase")
+		Eventually(func(g Gomega) {
+			for ordinal := range replicas {
+				dpu, err := getDPU(fleetDPUName(ordinal))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(dpu.Status.Phase).To(Equal(provisioningv1.DPUReady), "DPU %s phase", dpu.Name)
+			}
+		}, 10*time.Minute, 5*time.Second).Should(Succeed())
 	})
 
 	It("replaces an ordinal whose VirtualMachine was deleted", func() {
@@ -542,6 +554,15 @@ var _ = Describe("SimFleet", Ordered, func() {
 
 		By("verifying the replaced ordinal was torn down without forcing a finalizer")
 		expectNoForcedTeardown()
+
+		// Last on purpose: every check above is about what this controller
+		// owns, and this one is about DPF finishing the DPUs after the join.
+		By("waiting for the replacement DPU to reach the Ready phase")
+		Eventually(func(g Gomega) {
+			dpu, err := getDPU(dpuName)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dpu.Status.Phase).To(Equal(provisioningv1.DPUReady), "DPU %s phase", dpu.Name)
+		}, 10*time.Minute, 5*time.Second).Should(Succeed())
 	})
 
 	It("scales a fleet down and removes the scaled-away ordinal", func() {
