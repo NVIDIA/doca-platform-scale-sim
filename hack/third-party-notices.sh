@@ -43,11 +43,9 @@ out="$(mktemp)"
 trap 'rm -f "$log" "$out" "$NOTICES.tmp"' EXIT
 
 # report DIR IGNORE PACKAGE prints one table row per library PACKAGE links.
-# Both binaries only ship for linux/amd64, so scan for that platform rather
-# than the host's. go-licenses recognizes the standard library by the GOROOT
-# it was built with, so the go list it runs must not switch toolchains.
+# Both binaries only ship for linux/amd64.
 report() {
-	if ! (cd "$1" && GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 \
+	if ! (cd "$1" && GOOS=linux GOARCH=amd64 \
 		"$GO_LICENSES" report --template "$TEMPLATE" --ignore "$2" "$3") \
 		> "$out" 2> "$log"; then
 		cat "$log" >&2
