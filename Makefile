@@ -102,17 +102,17 @@ test: setup-envtest ## Run the unit and envtest tests. `make verify` checks the 
 	$(GO) test -count=1 ./test/consistency/
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" $(GO) test $(TESTPKGS) $(GO_TEST_ARGS) -coverprofile cover.out
 
-# e2e uses a local Kind cluster and DPF prerequisite charts from
-# https://github.com/NVIDIA/doca-platform/tree/public-release-v26.8
-# pinned to e343a51b63ee8cddd29f71891455ff6f83e50d94.
+# e2e uses a local Kind cluster and the DPF prerequisite helmfiles shipped in
+# the dpf-operator chart (see DPF_HELM_VERSION).
 # `make test-e2e` also builds and deploys the controller, then deletes the cluster.
 KIND_CLUSTER ?= simfleet-controller-test-e2e
 KIND_KUBERNETES_VERSION ?= v1.36.4
 KIND_NODE_IMAGE ?= kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
-DPF_HELMFILES_REPO ?= https://github.com/NVIDIA/doca-platform.git
-DPF_HELMFILES_REF ?= e343a51b63ee8cddd29f71891455ff6f83e50d94
+DPF_HELM_REPO ?= https://helm.ngc.nvidia.com/nvidia/doca
+DPF_HELM_CHART ?= dpf-operator
+DPF_HELM_VERSION ?= v26.8.0
 DPF_HELMFILES_DIR ?= $(LOCALBIN)/dpf-helmfiles
-HELMFILE_FILE ?= $(DPF_HELMFILES_DIR)/deploy/helmfiles/prereqs.yaml
+HELMFILE_FILE ?= $(DPF_HELMFILES_DIR)/prereqs.yaml
 
 .PHONY: check-e2e-host
 check-e2e-host: ## Verify test-e2e runs on Linux amd64
@@ -131,8 +131,8 @@ setup-test-e2e: check-e2e-host kind ## Create a Kind cluster for e2e tests if it
 		KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) KUBECTL=$(KUBECTL) ./hack/e2e/setup-kind.sh
 
 .PHONY: fetch-e2e-helmfiles
-fetch-e2e-helmfiles: ## Sparse-clone DPF helmfiles from NVIDIA/doca-platform
-	DPF_HELMFILES_REPO=$(DPF_HELMFILES_REPO) DPF_HELMFILES_REF=$(DPF_HELMFILES_REF) \
+fetch-e2e-helmfiles: helm ## Extract the DPF helmfiles shipped in the public dpf-operator chart
+	HELM=$(HELM) DPF_HELM_REPO=$(DPF_HELM_REPO) DPF_HELM_CHART=$(DPF_HELM_CHART) DPF_HELM_VERSION=$(DPF_HELM_VERSION) \
 		DPF_HELMFILES_DIR=$(DPF_HELMFILES_DIR) ./hack/e2e/fetch-helmfiles.sh
 
 .PHONY: deploy-e2e-prereqs
@@ -140,9 +140,6 @@ deploy-e2e-prereqs: setup-test-e2e fetch-e2e-helmfiles helmfile helm helm-diff h
 	cd "$(dir $(HELMFILE_FILE))" && \
 		PATH="$(LOCALBIN):$(PATH)" $(HELMFILE) --helm-binary "$(HELM)" --file "$(notdir $(HELMFILE_FILE))" sync
 
-DPF_HELM_REPO ?= https://helm.ngc.nvidia.com/nvidia/doca
-DPF_HELM_CHART ?= dpf-operator
-DPF_HELM_VERSION ?= v26.8.0
 DPF_OPERATOR_NAMESPACE ?= dpf-operator-system
 DPF_OPERATOR_RELEASE ?= dpf-operator
 DPF_OPERATOR_CONFIG ?= $(CURDIR)/hack/e2e/dpfoperatorconfig.yaml

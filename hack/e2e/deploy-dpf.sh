@@ -18,24 +18,19 @@ set -o nounset
 set -o pipefail
 set -o errexit
 
-HELM_BIN="${HELM:-helm}"
-KUBECTL_BIN="${KUBECTL:-kubectl}"
-# An HTTP chart repository, as NGC publishes DPF; leave empty for an oci:// chart.
-DPF_HELM_REPO="${DPF_HELM_REPO:-https://helm.ngc.nvidia.com/nvidia/doca}"
-DPF_HELM_CHART="${DPF_HELM_CHART:-dpf-operator}"
-DPF_HELM_VERSION="${DPF_HELM_VERSION:-v26.8.0}"
-DPF_OPERATOR_NAMESPACE="${DPF_OPERATOR_NAMESPACE:-dpf-operator-system}"
-DPF_OPERATOR_RELEASE="${DPF_OPERATOR_RELEASE:-dpf-operator}"
-DPF_OPERATOR_CONFIG="${DPF_OPERATOR_CONFIG:-}"
+HELM_BIN="${HELM:?HELM is required}"
+KUBECTL_BIN="${KUBECTL:?KUBECTL is required}"
+# An HTTP chart repository, as NGC publishes DPF.
+DPF_HELM_REPO="${DPF_HELM_REPO:?DPF_HELM_REPO is required}"
+DPF_HELM_CHART="${DPF_HELM_CHART:?DPF_HELM_CHART is required}"
+DPF_HELM_VERSION="${DPF_HELM_VERSION:?DPF_HELM_VERSION is required}"
+DPF_OPERATOR_NAMESPACE="${DPF_OPERATOR_NAMESPACE:?DPF_OPERATOR_NAMESPACE is required}"
+DPF_OPERATOR_RELEASE="${DPF_OPERATOR_RELEASE:?DPF_OPERATOR_RELEASE is required}"
+DPF_OPERATOR_CONFIG="${DPF_OPERATOR_CONFIG:?DPF_OPERATOR_CONFIG is required}"
 
-repo_args=()
-if [[ -n "${DPF_HELM_REPO}" ]]; then
-	repo_args=(--repo "${DPF_HELM_REPO}")
-fi
-
-echo "Installing DPF operator ${DPF_HELM_REPO:+${DPF_HELM_REPO}/}${DPF_HELM_CHART}:${DPF_HELM_VERSION} into ${DPF_OPERATOR_NAMESPACE}..."
+echo "Installing DPF operator ${DPF_HELM_REPO}/${DPF_HELM_CHART}:${DPF_HELM_VERSION} into ${DPF_OPERATOR_NAMESPACE}..."
 "${HELM_BIN}" upgrade --install "${DPF_OPERATOR_RELEASE}" "${DPF_HELM_CHART}" \
-	${repo_args[@]+"${repo_args[@]}"} \
+	--repo "${DPF_HELM_REPO}" \
 	--version "${DPF_HELM_VERSION}" \
 	--namespace "${DPF_OPERATOR_NAMESPACE}" \
 	--create-namespace \
@@ -82,32 +77,30 @@ dump_dpf_state() {
 	done
 }
 
-if [[ -n "${DPF_OPERATOR_CONFIG}" ]]; then
-	# The endpoint of the default kubernetes Service is the API server address
-	# the DPF components have to reach, and it is only known once Kind has
-	# created the cluster.
-	api_server_vip="$("${KUBECTL_BIN}" get endpointslice kubernetes --namespace default \
-		-o jsonpath='{.endpoints[0].addresses[0]}')"
-	api_server_port="$("${KUBECTL_BIN}" get endpointslice kubernetes --namespace default \
-		-o jsonpath='{.ports[0].port}')"
-	if [[ -z "${api_server_vip}" || -z "${api_server_port}" ]]; then
-		echo "Could not read the kubernetes Service endpoint" >&2
-		exit 1
-	fi
+# The endpoint of the default kubernetes Service is the API server address
+# the DPF components have to reach, and it is only known once Kind has
+# created the cluster.
+api_server_vip="$("${KUBECTL_BIN}" get endpointslice kubernetes --namespace default \
+	-o jsonpath='{.endpoints[0].addresses[0]}')"
+api_server_port="$("${KUBECTL_BIN}" get endpointslice kubernetes --namespace default \
+	-o jsonpath='{.ports[0].port}')"
+if [[ -z "${api_server_vip}" || -z "${api_server_port}" ]]; then
+	echo "Could not read the kubernetes Service endpoint" >&2
+	exit 1
+fi
 
-	echo "Applying DPFOperatorConfig from ${DPF_OPERATOR_CONFIG} with API server ${api_server_vip}:${api_server_port}..."
-	sed -e "s/KUBERNETES_API_SERVER_VIP/${api_server_vip}/" \
-		-e "s/KUBERNETES_API_SERVER_PORT/${api_server_port}/" \
-		"${DPF_OPERATOR_CONFIG}" | "${KUBECTL_BIN}" apply -f -
-	if ! "${KUBECTL_BIN}" wait --for=condition=Ready \
-		dpfoperatorconfig/dpfoperatorconfig \
-		--namespace "${DPF_OPERATOR_NAMESPACE}" \
-		--timeout 10m; then
-		# The cluster is torn down by the job's after_script, so the reason has to
-		# be captured here or it is lost.
-		dump_dpf_state
-		exit 1
-	fi
+echo "Applying DPFOperatorConfig from ${DPF_OPERATOR_CONFIG} with API server ${api_server_vip}:${api_server_port}..."
+sed -e "s/KUBERNETES_API_SERVER_VIP/${api_server_vip}/" \
+	-e "s/KUBERNETES_API_SERVER_PORT/${api_server_port}/" \
+	"${DPF_OPERATOR_CONFIG}" | "${KUBECTL_BIN}" apply -f -
+if ! "${KUBECTL_BIN}" wait --for=condition=Ready \
+	dpfoperatorconfig/dpfoperatorconfig \
+	--namespace "${DPF_OPERATOR_NAMESPACE}" \
+	--timeout 10m; then
+	# The cluster is torn down by the job's after_script, so the reason has to
+	# be captured here or it is lost.
+	dump_dpf_state
+	exit 1
 fi
 
 echo "DPF operator ${DPF_HELM_VERSION} is installed."
