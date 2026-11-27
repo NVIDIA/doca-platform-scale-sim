@@ -22,6 +22,8 @@ FROM ubuntu:24.04
 ARG KUBE_APT_VERSION
 # File name of the mock-dpuagent binary inside the "dpuagent" build context.
 ARG DPUAGENT_FILE=mock-dpuagent
+# File name of the mock-ovs binary inside the "mockovs" build context.
+ARG MOCK_OVS_FILE=mock-ovs
 
 ENV container=oci \
     DEBIAN_FRONTEND=noninteractive
@@ -47,8 +49,9 @@ RUN KUBE_APT_VERSION="${KUBE_APT_VERSION}" /tmp/install.sh \
 
 # The same files, at the same paths, as customize-disk.sh puts in the VM disk.
 COPY --from=dpuagent --chmod=0755 ${DPUAGENT_FILE} /opt/dpf/mock-dpuagent
+COPY --from=mockovs --chmod=0755 ${MOCK_OVS_FILE} /usr/local/bin/mock-ovs
 COPY --chmod=0755 guest/wait-kubelet-join.sh /opt/dpf/wait-kubelet-join.sh
-COPY --chmod=0644 guest/mock-dpuagent.service guest/wait-kubelet-join.service /usr/lib/systemd/system/
+COPY --chmod=0644 guest/mock-dpuagent.service guest/wait-kubelet-join.service guest/mock-ovs.service /usr/lib/systemd/system/
 COPY --chmod=0644 guest/10-flannel.conflist /etc/cni/net.d/10-flannel.conflist
 
 # The VM image starts both units from cloud-init.target. A container has no
@@ -58,7 +61,7 @@ COPY --chmod=0644 guest/10-flannel.conflist /etc/cni/net.d/10-flannel.conflist
 RUN sed -i 's/^WantedBy=cloud-init.target$/WantedBy=multi-user.target/' \
       /usr/lib/systemd/system/mock-dpuagent.service \
       /usr/lib/systemd/system/wait-kubelet-join.service \
- && systemctl enable mock-dpuagent.service wait-kubelet-join.service
+ && systemctl enable mock-dpuagent.service wait-kubelet-join.service mock-ovs.service
 
 # Image-owned files live under /usr/lib/dpf-sim, never /etc/dpf-sim: the guest
 # Secret is mounted over /etc/dpf-sim and would hide them.

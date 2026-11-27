@@ -117,10 +117,13 @@ test_container_image_contract() {
 	assert_not_matches '^[^#]*qemu-guest-agent' "${dockerfile}"
 	assert_absent 'modules-load.d/simfleet.conf' "${dockerfile}"
 	# The same two units, binary and helper, at the same paths as the VM disk.
-	assert_contains 'guest/mock-dpuagent.service guest/wait-kubelet-join.service /usr/lib/systemd/system/' "${dockerfile}"
+	assert_contains 'guest/mock-dpuagent.service guest/wait-kubelet-join.service guest/mock-ovs.service /usr/lib/systemd/system/' "${dockerfile}"
 	assert_contains '/opt/dpf/mock-dpuagent' "${dockerfile}"
 	assert_contains 'guest/wait-kubelet-join.sh /opt/dpf/wait-kubelet-join.sh' "${dockerfile}"
-	assert_contains 'systemctl enable mock-dpuagent.service wait-kubelet-join.service' "${dockerfile}"
+	assert_contains 'systemctl enable mock-dpuagent.service wait-kubelet-join.service mock-ovs.service' "${dockerfile}"
+	# mock-ovs comes from its own named context, like mock-dpuagent.
+	assert_contains 'COPY --from=mockovs --chmod=0755 ${MOCK_OVS_FILE} /usr/local/bin/mock-ovs' "${dockerfile}"
+	assert_contains 'ARG MOCK_OVS_FILE=mock-ovs' "${dockerfile}"
 	# A container has no cloud-init.target, so both units move to multi-user.target.
 	assert_contains "sed -i 's/^WantedBy=cloud-init.target\$/WantedBy=multi-user.target/'" "${dockerfile}"
 	assert_contains 'guest/10-flannel.conflist /etc/cni/net.d/10-flannel.conflist' "${dockerfile}"
@@ -172,11 +175,15 @@ test_container_image_contract() {
 	assert_contains 'SIMFLEET_KUBE_APT_VERSION' "${ROOT}/Makefile"
 	assert_absent '1.36' "${ROOT}/Makefile"
 	assert_contains 'DPUAGENT_BIN' "${ROOT}/Makefile"
+	assert_contains 'MOCK_OVS_BIN' "${ROOT}/Makefile"
 	if command -v make > /dev/null 2>&1; then
-		make -s -n -C "${ROOT}" node-container-image-build DPUAGENT_BIN="${TMP}/mock" > "${TMP}/container-make.out" 2>&1 \
+		make -s -n -C "${ROOT}" node-container-image-build DPUAGENT_BIN="${TMP}/mock" \
+			MOCK_OVS_BIN="${TMP}/mock-ovs" > "${TMP}/container-make.out" 2>&1 \
 			|| fail "make -n node-container-image-build failed"
 		assert_contains 'KUBE_APT_VERSION="1.36.4-1.1"' "${TMP}/container-make.out"
 		assert_contains "--build-context dpuagent=\"${TMP}/\"" "${TMP}/container-make.out"
+		assert_contains "--build-context mockovs=\"${TMP}/\"" "${TMP}/container-make.out"
+		assert_contains "--build-arg MOCK_OVS_FILE=\"mock-ovs\"" "${TMP}/container-make.out"
 	fi
 
 	# The VM disk must not carry anything that only the container uses: the VM
@@ -195,6 +202,8 @@ test_container_image_contract() {
 	assert_contains 'is-enabled kubelet.service' "${verifier}"
 	assert_contains 'mock-dpuagent.service' "${verifier}"
 	assert_contains 'wait-kubelet-join.service' "${verifier}"
+	assert_contains 'mock-ovs.service' "${verifier}"
+	assert_contains 'ovs-vsctl list-br' "${verifier}"
 	assert_contains 'dpkg-query -W -f=' "${verifier}"
 	assert_contains 'SIMFLEET_KUBE_APT_VERSION' "${verifier}"
 }
@@ -205,7 +214,7 @@ test_recipe_contract() {
 		source-hash.sh Dockerfile Dockerfile.builder customize-disk.sh \
 		verify-guest.sh README.md \
 		guest/install.sh guest/mock-dpuagent.service guest/wait-kubelet-join.sh \
-		guest/wait-kubelet-join.service guest/10-flannel.conflist; do
+		guest/wait-kubelet-join.service guest/mock-ovs.service guest/10-flannel.conflist; do
 		test -f "${ROOT}/${file}" || fail "missing ${file}"
 	done
 	for file in build.sh build-cached.sh check-host.sh customize-disk.sh \
@@ -419,12 +428,49 @@ test_recipe_contract() {
 	assert_contains 'StandardError=journal+console' "${ROOT}/guest/mock-dpuagent.service"
 }
 
+# test_mock_ovs_unit_contract pins the unit the guest runs for mock-ovs. The OVS
+# daemons it replaces must not run alongside it, and it has to be up before
+# cloud-final and kubelet.
+test_mock_ovs_unit_contract() {
+	local unit="${ROOT}/guest/mock-ovs.service"
+	assert_contains 'ExecStart=/usr/local/bin/mock-ovs' "${unit}"
+	assert_contains 'Conflicts=openvswitch-switch.service ovsdb-server.service ovs-vswitchd.service' "${unit}"
+	assert_contains 'Before=cloud-final.service kubelet.service' "${unit}"
+	assert_contains 'Restart=on-failure' "${unit}"
+	assert_contains '--bridges=br-sfc,br-hbn,br-ovn' "${unit}"
+	# Nothing here comes from cloud-init, so the unit is wanted by
+	# multi-user.target, the way verify-guest.sh and verify-container.sh expect.
+	assert_contains 'WantedBy=multi-user.target' "${unit}"
+	assert_absent 'WantedBy=cloud-init.target' "${unit}"
+}
+
+# test_ovs_client_contract pins where ovs-vsctl comes from and how the OVS
+# daemons are kept from running. Ubuntu ships ovs-vsctl in openvswitch-switch,
+# not in openvswitch-common, and that package enables the daemon units.
+test_ovs_client_contract() {
+	local install="${ROOT}/guest/install.sh"
+	assert_contains 'apt-get install -y --no-install-recommends openvswitch-switch' "${install}"
+	assert_absent 'openvswitch-common' "${install}"
+	assert_contains 'systemctl mask openvswitch-switch.service ovs-record-hostname.service' "${install}"
+	assert_contains 'ovsdb-server.service ovs-vswitchd.service' "${install}"
+}
+
 # write_dpuagent_bin stands in for the linux/amd64 mock agent that
 # hack/dpuagent/build.sh produces. Its bytes land in the source hash, so the
 # content is fixed unless a case deliberately changes it.
 write_dpuagent_bin() {
 	local target="${1:-${TMP}/mock-dpuagent}"
 	local content="${2:-fake mock-dpuagent}"
+	mkdir -p "$(dirname "${target}")"
+	printf '%s\n' "${content}" > "${target}"
+	chmod +x "${target}"
+}
+
+# write_mock_ovs_bin stands in for the linux/amd64 mock-ovs that
+# `make mock-ovs-build` produces. Its bytes land in the source hash too.
+write_mock_ovs_bin() {
+	local target="${1:-${TMP}/mock-ovs}"
+	local content="${2:-fake mock-ovs}"
 	mkdir -p "$(dirname "${target}")"
 	printf '%s\n' "${content}" > "${target}"
 	chmod +x "${target}"
@@ -480,6 +526,21 @@ while IFS= read -r request; do
       ;;
     'is-file /usr/sbin/qemu-ga') printf '%s\n' "${FAKE_QEMU_GA_SBIN:-true}" ;;
     'is-file /usr/bin/qemu-ga') printf '%s\n' "${FAKE_QEMU_GA_BIN:-false}" ;;
+    'is-symlink /etc/systemd/system/openvswitch-switch.service' \
+      | 'is-symlink /etc/systemd/system/ovs-record-hostname.service' \
+      | 'is-symlink /etc/systemd/system/ovsdb-server.service' \
+      | 'is-symlink /etc/systemd/system/ovs-vswitchd.service')
+      printf '%s\n' "${FAKE_OVS_MASKED:-true}"
+      ;;
+    'readlink /etc/systemd/system/openvswitch-switch.service' \
+      | 'readlink /etc/systemd/system/ovs-record-hostname.service' \
+      | 'readlink /etc/systemd/system/ovsdb-server.service' \
+      | 'readlink /etc/systemd/system/ovs-vswitchd.service')
+      printf '%s\n' "${FAKE_OVS_MASK_TARGET:-/dev/null}"
+      ;;
+    'is-symlink /etc/systemd/system/multi-user.target.wants/mock-ovs.service')
+      printf '%s\n' "${FAKE_MOCK_OVS_ENABLED:-true}"
+      ;;
     'is-file /etc/resolv.conf.simfleet-build')
       printf '%s\n' "${FAKE_RESOLV_BACKUP_LEFT:-false}"
       ;;
@@ -668,6 +729,7 @@ case "${1:-}" in
 esac'
 	write_guestfish
 	write_dpuagent_bin
+	write_mock_ovs_bin
 }
 
 run_build() {
@@ -680,6 +742,7 @@ run_build() {
 		env PATH="${TMP}/bin:${PATH}" CALLS="${CALLS}" WORK="${WORK}" \
 			BASE_IMAGE="example.invalid/ubuntu@sha256:test" NODE_IMG="test-node:local" \
 			SIMFLEET_KVM=off DPUAGENT_BIN="${TMP}/mock-dpuagent" \
+			MOCK_OVS_BIN="${TMP}/mock-ovs" \
 			"$@" "${script}"
 	)
 }
@@ -690,6 +753,7 @@ run_source_hash() {
 	local script="$1"
 	shift
 	env BASE_IMAGE=base@sha256:one DPUAGENT_BIN="${TMP}/mock-dpuagent" \
+		MOCK_OVS_BIN="${TMP}/mock-ovs" \
 		SIMFLEET_MOCK_REF="${ROOT}/../../hack/dpuagent/mock.ref" \
 		"$@" "${script}"
 }
@@ -697,6 +761,7 @@ run_source_hash() {
 test_source_hash() {
 	local first second
 	write_dpuagent_bin
+	write_mock_ovs_bin
 	first="$(run_source_hash "${ROOT}/source-hash.sh")"
 	second="$(run_source_hash "${ROOT}/source-hash.sh")"
 	test "${first}" = "${second}" || fail "source hash is not stable"
@@ -717,6 +782,19 @@ test_source_hash() {
 	second="$(run_source_hash "${ROOT}/source-hash.sh" \
 		DPUAGENT_BIN="${TMP}/other-mock-dpuagent")"
 	test "${first}" != "${second}" || fail "source hash ignores the mock-dpuagent binary"
+
+	# mock-ovs is built from this checkout, so its bytes are the only thing
+	# that says what goes into the guest. They have to invalidate a cached image.
+	write_mock_ovs_bin "${TMP}/other-mock-ovs" "a different mock-ovs"
+	second="$(run_source_hash "${ROOT}/source-hash.sh" \
+		MOCK_OVS_BIN="${TMP}/other-mock-ovs")"
+	test "${first}" != "${second}" || fail "source hash ignores the mock-ovs binary"
+	if run_source_hash "${ROOT}/source-hash.sh" \
+		MOCK_OVS_BIN="${TMP}/absent-mock-ovs" > "${TMP}/hash-missing-ovs.out" 2>&1; then
+		fail "source-hash.sh produced a hash without the mock-ovs binary"
+	fi
+	assert_contains 'mock-ovs binary not found' "${TMP}/hash-missing-ovs.out"
+	assert_contains 'make mock-ovs-build' "${TMP}/hash-missing-ovs.out"
 
 	# The provenance has to be hack/dpuagent/mock.ref, which is what
 	# hack/dpuagent/build.sh actually checks out. The controller's go.mod pin of
@@ -801,6 +879,12 @@ test_build_orchestration() {
 	assert_contains '--run-command systemctl enable mock-dpuagent.service' "${CALLS}"
 	assert_contains '--run-command systemctl enable wait-kubelet-join.service' "${CALLS}"
 	assert_contains 'chmod 0755 /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh' "${CALLS}"
+	# mock-ovs is staged next to the agent and uploaded to its file path, with
+	# its unit enabled the same way.
+	assert_contains "--upload ${WORK}/mock-ovs:/usr/local/bin/mock-ovs" "${CALLS}"
+	assert_contains "--copy-in ${ROOT}/guest/mock-ovs.service:/usr/lib/systemd/system" "${CALLS}"
+	assert_contains '--run-command systemctl enable mock-ovs.service' "${CALLS}"
+	assert_contains 'chmod 0755 /usr/local/bin/mock-ovs' "${CALLS}"
 	assert_contains 'virt-sysprep -a' "${CALLS}"
 	assert_absent 'virt-resize' "${CALLS}"
 	assert_absent 'growpart' "${CALLS}"
@@ -845,6 +929,27 @@ test_build_requires_dpuagent_binary() {
 	assert_contains 'mock-dpuagent binary not found' "${TMP}/customize-missing.out"
 	assert_contains 'make dpuagent-build' \
 		"${TMP}/customize-missing.out"
+
+	# mock-ovs gets the same treatment: build.sh stops before the base pull, and
+	# customize-disk.sh refuses to run without it.
+	: > "${CALLS}"
+	if run_build ./build.sh MOCK_OVS_BIN="${TMP}/absent-mock-ovs" \
+		> "${TMP}/ovs-missing.out" 2>&1; then
+		fail "build.sh built an image without the mock-ovs binary"
+	fi
+	assert_contains 'mock-ovs binary not found' "${TMP}/ovs-missing.out"
+	assert_contains 'make mock-ovs-build' "${TMP}/ovs-missing.out"
+	assert_absent 'docker create' "${CALLS}"
+	if (
+		cd "${ROOT}" \
+			&& env PATH="${TMP}/bin:${PATH}" CALLS="${CALLS}" \
+				DPUAGENT_BIN="${TMP}/mock-dpuagent" MOCK_OVS_BIN="" \
+				./customize-disk.sh "${TMP}/base.img" "${TMP}/out.img"
+	) > "${TMP}/customize-ovs-missing.out" 2>&1; then
+		fail "customize-disk.sh customized a disk without the mock-ovs binary"
+	fi
+	assert_contains 'mock-ovs binary not found' "${TMP}/customize-ovs-missing.out"
+	assert_contains 'make mock-ovs-build' "${TMP}/customize-ovs-missing.out"
 }
 
 test_build_stamps_release_version() {
@@ -999,7 +1104,7 @@ test_customize_reports_libguestfs_diagnostics() {
 	if (
 		cd "${ROOT}"
 		env PATH="${TMP}/bin:${PATH}" FAKE_GUESTFISH_FAIL_ON=inspect-os \
-			DPUAGENT_BIN="${TMP}/mock-dpuagent" \
+			DPUAGENT_BIN="${TMP}/mock-dpuagent" MOCK_OVS_BIN="${TMP}/mock-ovs" \
 			./customize-disk.sh "${work}/base.img" "${work}/disk.img"
 	) > "${TMP}/diag.out" 2>&1; then
 		fail "customize-disk.sh continued after libguestfs failed"
@@ -1783,7 +1888,9 @@ test_verifier_rejects_missing_guest_file() {
 		/usr/lib/udev/rules.d/60-qemu-guest-agent.rules \
 		/opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh \
 		/usr/lib/systemd/system/mock-dpuagent.service \
-		/usr/lib/systemd/system/wait-kubelet-join.service; do
+		/usr/lib/systemd/system/wait-kubelet-join.service \
+		/usr/local/bin/mock-ovs /usr/lib/systemd/system/mock-ovs.service \
+		/usr/bin/ovs-vsctl /usr/bin/ovs-ofctl; do
 		if run_verifier "${TMP}/verify-missing.out" "FAKE_MISSING_FILE=${file}"; then
 			fail "verify-guest.sh accepted a guest without ${file}"
 		fi
@@ -1816,6 +1923,22 @@ test_verifier_rejects_incorrect_systemd_state() {
 		fail "verify-guest.sh accepted disabled mock-dpuagent"
 	fi
 	assert_contains 'mock-dpuagent.service is disabled; expected enabled' "${TMP}/verify-dpuagent.out"
+
+	# mock-ovs must be enabled, and the OVS daemon units it replaces must be
+	# masked, or they would conflict with it.
+	if run_verifier "${TMP}/verify-ovs-enabled.out" FAKE_MOCK_OVS_ENABLED=false; then
+		fail "verify-guest.sh accepted disabled mock-ovs"
+	fi
+	assert_contains 'mock-ovs.service is disabled; expected enabled' "${TMP}/verify-ovs-enabled.out"
+	if run_verifier "${TMP}/verify-ovs-unmasked.out" FAKE_OVS_MASKED=false; then
+		fail "verify-guest.sh accepted unmasked OVS daemon units"
+	fi
+	assert_contains 'is not masked; mock-ovs replaces the OVS daemons' "${TMP}/verify-ovs-unmasked.out"
+	if run_verifier "${TMP}/verify-ovs-mask-target.out" \
+		FAKE_OVS_MASK_TARGET=/usr/lib/systemd/system/ovs-vswitchd.service; then
+		fail "verify-guest.sh accepted an OVS unit masked to something other than /dev/null"
+	fi
+	assert_contains 'is not masked; mock-ovs replaces the OVS daemons' "${TMP}/verify-ovs-mask-target.out"
 
 	# The agent is ordered after cloud-final.service, which starts only once
 	# multi-user.target has been reached. Enabled there, its start job waits on a
@@ -2256,6 +2379,8 @@ test_node_prep_manifests() {
 }
 
 test_recipe_contract
+test_mock_ovs_unit_contract
+test_ovs_client_contract
 test_container_image_contract
 test_node_prep_sets_the_host_up
 test_node_prep_never_decreases_a_sysctl

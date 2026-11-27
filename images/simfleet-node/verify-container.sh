@@ -99,14 +99,14 @@ fi
 
 # degraded is acceptable, but not because of our own units.
 failed="$(in_container systemctl list-units --failed --plain --no-legend --no-pager || true)"
-for unit in mock-dpuagent.service wait-kubelet-join.service containerd.service; do
+for unit in mock-dpuagent.service wait-kubelet-join.service mock-ovs.service containerd.service; do
 	if grep -q "^${unit} " <<< "${failed}"; then
 		fail "${unit} failed: ${failed}"
 	fi
 done
 
-# Both units, enabled under multi-user.target: a container has no cloud-init.target.
-for unit in mock-dpuagent.service wait-kubelet-join.service; do
+# The units, enabled under multi-user.target: a container has no cloud-init.target.
+for unit in mock-dpuagent.service wait-kubelet-join.service mock-ovs.service; do
 	in_container test -f "/usr/lib/systemd/system/${unit}" \
 		|| fail "/usr/lib/systemd/system/${unit} is missing"
 	enabled="$(in_container systemctl is-enabled "${unit}" || true)"
@@ -123,8 +123,11 @@ for file in /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh \
 	/usr/local/bin/container-entrypoint.sh; do
 	in_container test -f "${file}" || fail "${file} is missing"
 done
-for file in /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh; do
+for file in /opt/dpf/mock-dpuagent /opt/dpf/wait-kubelet-join.sh /usr/local/bin/mock-ovs; do
 	in_container test -x "${file}" || fail "${file} is not executable"
+done
+for file in /usr/bin/ovs-vsctl /usr/bin/ovs-ofctl; do
+	in_container test -x "${file}" || fail "${file} is missing"
 done
 
 # Without the Secret neither unit has anything to do, so neither should run.
@@ -132,6 +135,19 @@ for unit in mock-dpuagent.service wait-kubelet-join.service; do
 	active="$(in_container systemctl is-active "${unit}" || true)"
 	if [ "${active}" = active ] || [ "${active}" = activating ] || [ "${active}" = failed ]; then
 		fail "${unit} is ${active} without its configuration"
+	fi
+done
+
+# mock-ovs needs no Secret, so it runs as soon as systemd does. Its unit creates
+# br-sfc, br-hbn and br-ovn, and the OVS clients must see them through the socket.
+active="$(in_container systemctl is-active mock-ovs.service || true)"
+if [ "${active}" != active ]; then
+	fail "mock-ovs.service is ${active}; expected active"
+fi
+bridges="$(in_container ovs-vsctl list-br || true)"
+for bridge in br-sfc br-hbn br-ovn; do
+	if ! grep -qx "${bridge}" <<< "${bridges}"; then
+		fail "ovs-vsctl list-br does not show ${bridge}: ${bridges}"
 	fi
 done
 
@@ -155,9 +171,12 @@ for package in kubelet kubeadm kubectl; do
 	fi
 done
 
-# Units a container must not run stay masked.
+# Units a container must not run stay masked. The OVS daemon units would serve
+# the sockets mock-ovs serves, so they are masked as well.
 for unit in systemd-modules-load.service systemd-resolved.service \
-	systemd-udevd.service 'getty@.service' systemd-remount-fs.service; do
+	systemd-udevd.service 'getty@.service' systemd-remount-fs.service \
+	openvswitch-switch.service ovs-record-hostname.service \
+	ovsdb-server.service ovs-vswitchd.service; do
 	masked="$(in_container systemctl is-enabled "${unit}" 2> /dev/null || true)"
 	if [ "${masked}" != masked ]; then
 		fail "${unit} is '${masked}'; expected masked"

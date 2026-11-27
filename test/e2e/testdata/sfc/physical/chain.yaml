@@ -1,0 +1,21 @@
+# p0 <-> pf0hpf, the plain chain of DPF's own e2e: no service in between, so it
+# exercises sfc-controller's ServiceChain and NodeServiceInterfaces handling
+# without a pod that needs a network attachment.
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUServiceChain
+metadata:
+  name: e2e-chain
+  namespace: dpf-operator-system
+spec:
+  template:
+    spec:
+      template:
+        spec:
+          switches:
+            - ports:
+                - serviceInterface:
+                    matchLabels:
+                      scale.dpu.nvidia.com/e2e-interface: p0
+                - serviceInterface:
+                    matchLabels:
+                      scale.dpu.nvidia.com/e2e-interface: pf0hpf

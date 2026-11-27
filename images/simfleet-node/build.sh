@@ -54,6 +54,7 @@ KUBE_APT_VERSION="${KUBE_APT_VERSION:-${SIMFLEET_KUBE_APT_VERSION}}"
 IMAGE_VERSION="${IMAGE_VERSION:-}"
 BUILDER_IMAGE="${BUILDER_IMAGE:-${SIMFLEET_BUILDER_IMAGE}}"
 DPUAGENT_BIN="$(simfleet_dpuagent_bin)"
+MOCK_OVS_BIN="$(simfleet_mock_ovs_bin)"
 
 simfleet_require_host "${CONTAINER_TOOL}"
 
@@ -62,11 +63,16 @@ if [ ! -s "${DPUAGENT_BIN}" ]; then
 	echo "build it with: make dpuagent-build" >&2
 	exit 1
 fi
+if [ ! -s "${MOCK_OVS_BIN}" ]; then
+	echo "mock-ovs binary not found at ${MOCK_OVS_BIN}" >&2
+	echo "build it with: make mock-ovs-build" >&2
+	exit 1
+fi
 
 source_hash="$(
 	BASE_IMAGE="${BASE_IMAGE}" DISK_SIZE="${DISK_SIZE}" \
 		KUBE_APT_VERSION="${KUBE_APT_VERSION}" IMAGE_VERSION="${IMAGE_VERSION}" \
-		DPUAGENT_BIN="${DPUAGENT_BIN}" \
+		DPUAGENT_BIN="${DPUAGENT_BIN}" MOCK_OVS_BIN="${MOCK_OVS_BIN}" \
 		"${ROOT}/source-hash.sh"
 )"
 
@@ -83,13 +89,15 @@ simfleet_build_builder_image "${CONTAINER_TOOL}" "${BUILDER_IMAGE}" "${iid_file}
 IFS= read -r builder_image_id < "${iid_file}"
 
 echo "Customizing the disk in ${BUILDER_IMAGE}"
-# The mock binary is built outside the recipe directory, so stage it into the
-# work mount; /recipe is the only other path the builder can see.
+# The mock binaries are built outside the recipe directory, so stage them into
+# the work mount; /recipe is the only other path the builder can see.
 cp "${DPUAGENT_BIN}" "${WORK}/mock-dpuagent"
+cp "${MOCK_OVS_BIN}" "${WORK}/mock-ovs"
 simfleet_run_in_builder "${CONTAINER_TOOL}" "${builder_image_id}" "${WORK}" \
 	-e "DISK_SIZE=${DISK_SIZE}" \
 	-e "KUBE_APT_VERSION=${KUBE_APT_VERSION}" \
 	-e "DPUAGENT_BIN=/work/mock-dpuagent" \
+	-e "MOCK_OVS_BIN=/work/mock-ovs" \
 	-- /recipe/customize-disk.sh /work/base.img /work/disk.img
 
 mkdir -p "${WORK}/context"

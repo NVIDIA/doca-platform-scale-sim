@@ -1,0 +1,34 @@
+# DPF's dummydpuservice. The chart is not published anywhere, so the suite
+# takes the repository from E2E_DUMMY_CHART_REPO and renders these placeholders. The service asks for
+# no nvidia.com/bf_sf: the guests have no SFs for the device plugin to offer,
+# and a pod that requested one would stay Pending.
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUService
+metadata:
+  name: e2e-dummy
+  namespace: dpf-operator-system
+spec:
+  serviceID: e2e-dummy
+  # Required for a DPUService that targets a DPUCluster. The dummy service runs
+  # no privileged container.
+  security:
+    privileged: false
+  interfaces:
+    - e2e-dummy-eth1
+    - e2e-dummy-eth2
+  helmChart:
+    source:
+      repoURL: ${E2E_DUMMY_CHART_REPO}
+      chart: ${E2E_DUMMY_CHART_NAME}
+      version: ${E2E_DUMMY_CHART_VERSION}
+    values:
+      image:
+        repository: ${E2E_DUMMY_IMAGE_REPOSITORY}
+        tag: "${E2E_DUMMY_IMAGE_TAG}"
+  serviceDaemonSet:
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 1
+    labels:
+      scale.dpu.nvidia.com/e2e-service: dummy

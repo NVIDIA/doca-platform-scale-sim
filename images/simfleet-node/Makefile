@@ -23,6 +23,8 @@ IMAGE_VERSION ?=
 # Produced by `make dpuagent-build`, which writes
 # exactly this path.
 DPUAGENT_BIN ?= $(CURDIR)/../../bin/mock-dpuagent
+# linux/amd64 mock-ovs built from pkg/mock-ovs. Produced by `make mock-ovs-build`.
+MOCK_OVS_BIN ?= $(CURDIR)/../../bin/mock-ovs
 
 # The node-in-a-pod image. Same architecture as the VM image.
 NODE_CONTAINER_IMG ?= simfleet-node-container:local
@@ -35,7 +37,8 @@ BUILDER_IMAGE ?= simfleet-node-builder:local
 
 BUILD_ENV = BASE_IMAGE="$(BASE_IMAGE)" NODE_IMG="$(NODE_IMG)" DISK_SIZE="$(DISK_SIZE)" \
 	  CONTAINER_TOOL="$(CONTAINER_TOOL)" BUILDER_IMAGE="$(BUILDER_IMAGE)" \
-	  IMAGE_VERSION="$(IMAGE_VERSION)" DPUAGENT_BIN="$(DPUAGENT_BIN)"
+	  IMAGE_VERSION="$(IMAGE_VERSION)" DPUAGENT_BIN="$(DPUAGENT_BIN)" \
+	  MOCK_OVS_BIN="$(MOCK_OVS_BIN)"
 
 .PHONY: check-host
 check-host:
@@ -57,13 +60,18 @@ node-image-build-cached:
 	$(BUILD_ENV) ./build-cached.sh
 
 # Builds the node-in-a-pod image from the same guest/ files and the same
-# mock-dpuagent binary as the VM image. The binary lives outside the build
-# context, so it comes in as the "dpuagent" named context.
+# mock-dpuagent and mock-ovs binaries as the VM image. The binaries live outside
+# the build context, so they come in as the "dpuagent" and "mockovs" named
+# contexts.
 .PHONY: node-container-image-build
 node-container-image-build:
 	@test -s "$(DPUAGENT_BIN)" || { \
 	  echo "mock-dpuagent binary not found at $(DPUAGENT_BIN)" >&2; \
 	  echo "build it with: make dpuagent-build" >&2; \
+	  exit 1; }
+	@test -s "$(MOCK_OVS_BIN)" || { \
+	  echo "mock-ovs binary not found at $(MOCK_OVS_BIN)" >&2; \
+	  echo "build it with: make mock-ovs-build" >&2; \
 	  exit 1; }
 	@test -n "$(KUBE_APT_VERSION)" || { \
 	  echo "could not read SIMFLEET_KUBE_APT_VERSION from lib.sh" >&2; \
@@ -71,14 +79,16 @@ node-container-image-build:
 	$(CONTAINER_TOOL) build --platform linux/amd64 \
 	  --build-arg KUBE_APT_VERSION="$(KUBE_APT_VERSION)" \
 	  --build-arg DPUAGENT_FILE="$(notdir $(DPUAGENT_BIN))" \
+	  --build-arg MOCK_OVS_FILE="$(notdir $(MOCK_OVS_BIN))" \
 	  --build-context dpuagent="$(dir $(DPUAGENT_BIN))" \
+	  --build-context mockovs="$(dir $(MOCK_OVS_BIN))" \
 	  -t $(NODE_CONTAINER_IMG) -f Dockerfile.container .
 
 .PHONY: node-image-source-hash
 node-image-source-hash:
 	@BASE_IMAGE="$(BASE_IMAGE)" DISK_SIZE="$(DISK_SIZE)" \
 	  IMAGE_VERSION="$(IMAGE_VERSION)" DPUAGENT_BIN="$(DPUAGENT_BIN)" \
-	  ./source-hash.sh
+	  MOCK_OVS_BIN="$(MOCK_OVS_BIN)" ./source-hash.sh
 
 .PHONY: node-image-push
 node-image-push:

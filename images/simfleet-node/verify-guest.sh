@@ -62,6 +62,10 @@ expected_files=(
 	# would leave `systemctl mask` nowhere to put its /dev/null symlink.
 	/usr/lib/systemd/system/mock-dpuagent.service
 	/usr/lib/systemd/system/wait-kubelet-join.service
+	/usr/local/bin/mock-ovs
+	/usr/lib/systemd/system/mock-ovs.service
+	/usr/bin/ovs-vsctl
+	/usr/bin/ovs-ofctl
 )
 file_checks=()
 for file in "${expected_files[@]}"; do
@@ -102,6 +106,27 @@ unit_enabled() {
 	fail "unexpected guestfish answer for ${unit}: ${answer}"
 }
 
+# unit_masked answers whether /etc holds the /dev/null symlink that
+# `systemctl mask` writes for a unit. The OVS daemons ship in packages that
+# enable their units, so the mask is what keeps them from starting.
+unit_masked() {
+	local unit="$1" answer target
+	if ! answer="$(simfleet_guestfish "${DISK}" \
+		"is-symlink /etc/systemd/system/${unit}")"; then
+		fail "guestfish could not check whether ${unit} is masked"
+	fi
+	case "${answer}" in
+	true) ;;
+	false) return 1 ;;
+	*) fail "unexpected guestfish answer for ${unit}: ${answer}" ;;
+	esac
+	if ! target="$(simfleet_guestfish "${DISK}" \
+		"readlink /etc/systemd/system/${unit}")"; then
+		fail "guestfish could not read the mask of ${unit}"
+	fi
+	[ "${target}" = /dev/null ]
+}
+
 # kubelet remains disabled until kubeadm join starts it.
 if unit_enabled kubelet.service; then
 	fail "kubelet is enabled; expected disabled"
@@ -125,6 +150,19 @@ fi
 if unit_enabled wait-kubelet-join.service; then
 	fail "wait-kubelet-join.service is enabled under multi-user.target, which is reached before cloud-final"
 fi
+# mock-ovs needs no cloud-init input, and it is ordered before cloud-final and
+# kubelet, so multi-user.target is the right target for it.
+if ! unit_enabled mock-ovs.service; then
+	fail "mock-ovs.service is disabled; expected enabled"
+fi
+# mock-ovs serves the sockets the OVS daemons would, so their units must be
+# masked: an unmasked one would conflict with mock-ovs.service.
+for unit in openvswitch-switch.service ovs-record-hostname.service \
+	ovsdb-server.service ovs-vswitchd.service; do
+	if ! unit_masked "${unit}"; then
+		fail "${unit} is not masked; mock-ovs replaces the OVS daemons"
+	fi
+done
 
 # Ubuntu intentionally ships qemu-guest-agent.service as a static unit. It is
 # started by udev when KubeVirt exposes the virtio guest-agent port, so an

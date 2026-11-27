@@ -1,0 +1,40 @@
+# The two uplinks the physical chain joins. Each physical port must be owned by
+# exactly one DPUServiceInterface, and each chain selector must resolve to
+# exactly one ServiceInterface per node, so the labels below are unique to this
+# suite.
+#
+# Neither needs a pod: sfc-controller adds the p0 and pf0hpf ports to br-sfc
+# itself, and mock-ovs assigns their ofports.
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUServiceInterface
+metadata:
+  name: e2e-p0
+  namespace: dpf-operator-system
+spec:
+  template:
+    spec:
+      template:
+        metadata:
+          labels:
+            scale.dpu.nvidia.com/e2e-interface: p0
+        spec:
+          interfaceType: physical
+          physical:
+            interfaceName: p0
+---
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUServiceInterface
+metadata:
+  name: e2e-pf0hpf
+  namespace: dpf-operator-system
+spec:
+  template:
+    spec:
+      template:
+        metadata:
+          labels:
+            scale.dpu.nvidia.com/e2e-interface: pf0hpf
+        spec:
+          interfaceType: pf
+          pf:
+            pfID: 0

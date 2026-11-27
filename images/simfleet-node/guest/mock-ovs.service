@@ -1,0 +1,13 @@
+[Unit]
+Description=mock-ovs (OVSDB server, vswitchd emulator and OpenFlow switch)
+Conflicts=openvswitch-switch.service ovsdb-server.service ovs-vswitchd.service
+Before=cloud-final.service kubelet.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mock-ovs --bridges=br-sfc,br-hbn,br-ovn --physical-ports=p0,p1
+ExecStartPost=/bin/sh -c 'for i in $(seq 100); do [ -S /var/run/openvswitch/db.sock ] && [ -S /var/run/openvswitch/br-sfc.mgmt ] && exit 0; sleep 0.1; done; exit 1'
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

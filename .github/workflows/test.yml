@@ -43,6 +43,13 @@ jobs:
       - name: Verify generated files and the rendered Helm chart
         run: make verify
 
+      # The mock-ovs tests drive the switch with ovs-vsctl and ovs-ofctl. They
+      # fail, not skip, when the tools are missing and CI is set.
+      - name: Install Open vSwitch tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openvswitch-switch
+
       - name: Run unit tests
         run: make test
 

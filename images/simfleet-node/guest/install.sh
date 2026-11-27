@@ -84,6 +84,14 @@ apt-get install -y --no-install-recommends \
 
 apt-mark hold kubelet kubeadm kubectl kubernetes-cni
 
+# ovs-vsctl and ovs-ofctl are the client tools the OVS paths call, and Ubuntu
+# ships ovs-vsctl in openvswitch-switch, so that package is installed for its
+# clients. Its daemon units would serve the sockets mock-ovs serves, so they
+# are masked. The package enables them on install, and a mask overrides that.
+apt-get install -y --no-install-recommends openvswitch-switch
+systemctl mask openvswitch-switch.service ovs-record-hostname.service \
+	ovsdb-server.service ovs-vswitchd.service
+
 install -d -m 0755 /etc/cni/net.d /opt/cni/bin
 # kubernetes-cni ships plugins under /opt/cni/bin.
 
