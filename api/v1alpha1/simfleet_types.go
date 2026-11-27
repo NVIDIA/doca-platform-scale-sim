@@ -189,22 +189,6 @@ type PodTemplate struct {
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
-// DPUClusterReference names a DPF DPUCluster.
-type DPUClusterReference struct {
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-	// +kubebuilder:validation:MinLength=1
-	Namespace string `json:"namespace"`
-}
-
-// BootstrapSpec records the DPUCluster the fleet's guests are expected to
-// join. The controller does not read or contact that cluster; it writes the
-// reference into each guest's identity file. The cluster a guest joins is
-// decided by the join Secret DPF creates for its DPU.
-type BootstrapSpec struct {
-	DPUClusterRef DPUClusterReference `json:"dpuClusterRef"`
-}
-
 // DPUAgentSpec configures the mock DPU agent each guest runs. Disabling it
 // also stops the guest from joining the DPU cluster: the guest gets no agent
 // configuration and no management credential, and both the agent and the
@@ -386,9 +370,6 @@ type SimFleetSpec struct {
 
 	// +optional
 	PodTemplate *PodTemplate `json:"podTemplate,omitempty"`
-
-	// +optional
-	Bootstrap *BootstrapSpec `json:"bootstrap,omitempty"`
 
 	// +optional
 	DPUAgent *DPUAgentSpec `json:"dpuAgent,omitempty"`

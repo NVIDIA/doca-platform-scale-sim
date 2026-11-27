@@ -160,8 +160,6 @@ TEST_BFB_URL='http://bfb.example.com/bf-bundle.bfb'
 assert_rendered_manifest() {
 	local fleet_id="${1:-passthrough}"
 	local replicas="${2:-2}"
-	local cluster_name="${3:-dpu-cplane-tenant1}"
-	local cluster_ns="${4:-dpu-cplane-tenant1}"
 	grep -Fq "    image: ${TEST_VM_IMAGE}" "${STDIN_LOG}" \
 		|| fail "rendered VM image missing from kubectl apply stdin"
 	if grep -Fq 'example.invalid/simfleet-node:set-VM_IMAGE' "${STDIN_LOG}"; then
@@ -183,10 +181,6 @@ assert_rendered_manifest() {
 		|| fail "rendered pool label missing from kubectl apply stdin"
 	grep -Fxq "  replicas: ${replicas}" "${STDIN_LOG}" \
 		|| fail "rendered replicas ${replicas} missing from kubectl apply stdin"
-	grep -Fxq "      name: ${cluster_name}" "${STDIN_LOG}" \
-		|| fail "rendered DPUCluster name missing from kubectl apply stdin"
-	grep -Fxq "      namespace: ${cluster_ns}" "${STDIN_LOG}" \
-		|| fail "rendered DPUCluster namespace missing from kubectl apply stdin"
 	# The SimFleet must be created with its final spec, so the controller
 	# never reconciles the manifest defaults.
 	if grep -q '^kubectl patch ' "${LOG}"; then
@@ -258,15 +252,10 @@ run_installer \
 	VM_IMAGE="${TEST_VM_IMAGE}" \
 	BFB_URL="${TEST_BFB_URL}" \
 	REPLICAS=10 \
-	DPU_CLUSTER_NAME=tenant2 \
-	DPU_CLUSTER_NS=tenant2-ns \
 	"${BASH_BIN}" "${SCENARIO_DIR}/install-passthrough-simfleet.sh" \
 	> /dev/null \
-	|| fail "install-passthrough-simfleet.sh failed with REPLICAS and DPU_CLUSTER_* overrides"
-assert_rendered_manifest passthrough 10 tenant2 tenant2-ns
-if grep -Fq 'dpu-cplane-tenant1' "${STDIN_LOG}"; then
-	fail "default DPUCluster reference leaked into an overridden apply"
-fi
+	|| fail "install-passthrough-simfleet.sh failed with a REPLICAS override"
+assert_rendered_manifest passthrough 10
 
 for invalid in "FLEET_ID=Not a label" "REPLICAS=-1" "REPLICAS=2}" \
 	"DPU_CLUSTER_NAME=a\"b" "DPU_CLUSTER_NS=Tenant" \

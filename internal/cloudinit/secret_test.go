@@ -266,9 +266,6 @@ var _ = Describe("Cloud-init Secret", func() {
 				Spec: scalev1alpha1.SimFleetSpec{
 					Replicas:          3000,
 					DevicesPerDPUNode: 10,
-					Bootstrap: &scalev1alpha1.BootstrapSpec{
-						DPUClusterRef: scalev1alpha1.DPUClusterReference{Name: "tenant1", Namespace: "dpf-ns"},
-					},
 				},
 			}
 			const ordinal = 12
@@ -300,8 +297,6 @@ var _ = Describe("Cloud-init Secret", func() {
 				"DPU_NAMESPACE=fleet-ns",
 				"DPU_NODE_NAME=scale-3000-host-0001",
 				"DPU_DEVICE_NAME=scale-3000-device-000012",
-				"DPU_CLUSTER_NAME=tenant1",
-				"DPU_CLUSTER_NAMESPACE=dpf-ns",
 			}, "\n") + "\n"
 			Expect(identity.Content).To(Equal(wantIdentity))
 			conf := cfg.WriteFiles[1]
@@ -433,9 +428,6 @@ var _ = Describe("Cloud-init Secret", func() {
 				Spec: scalev1alpha1.SimFleetSpec{
 					Replicas:          3000,
 					DevicesPerDPUNode: 10,
-					Bootstrap: &scalev1alpha1.BootstrapSpec{
-						DPUClusterRef: scalev1alpha1.DPUClusterReference{Name: "tenant1", Namespace: "dpf-ns"},
-					},
 					DPUAgent: &scalev1alpha1.DPUAgentSpec{
 						DPUType:      ptr.To("bf4"),
 						RebootMethod: ptr.To("SLR,PowerCycle,NoAction"),
@@ -461,16 +453,6 @@ var _ = Describe("Cloud-init Secret", func() {
 			Expect(strings.Count(userdata, "name: CertificateService.ReplaceCertificate")).To(Equal(len(overrides)),
 				"rendered overrides")
 			Expect(len(userdata)).To(BeNumerically("<", maxCloudInitUserdataBytes), "userdata size")
-		})
-	})
-
-	Describe("dpuIdentityContent", func() {
-		It("leaves the cluster lines empty without a bootstrap spec", func() {
-			lines := strings.Split(dpuIdentityContent(fleetWith(nil), 0), "\n")
-			Expect(lines[len(lines)-1]).To(BeEmpty(), "identity content does not end with a newline: %q", lines)
-			lines = lines[:len(lines)-1]
-			Expect(lines).To(HaveLen(6))
-			Expect(lines[4:]).To(Equal([]string{"DPU_CLUSTER_NAME=", "DPU_CLUSTER_NAMESPACE="}))
 		})
 	})
 

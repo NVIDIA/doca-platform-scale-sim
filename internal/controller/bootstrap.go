@@ -32,8 +32,6 @@ import (
 // read DPF's per-DPU join Secret themselves with the management credential
 // cloud-init installs, so the controller mints no tenant bootstrap token and
 // never needs a DPUCluster to be reachable before a VirtualMachine can boot.
-// spec.bootstrap.dpuClusterRef survives only as the cluster identity written
-// into the guest's identity.env.
 type bootstrapConditionError struct {
 	reason  string
 	message string

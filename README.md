@@ -167,10 +167,6 @@ spec:
   devicesPerDPUNode: 1
   deviceSelectionLabels:
     scale.dpu.nvidia.com/pool: scale-100
-  bootstrap:
-    dpuClusterRef:
-      name: dpu-cplane-tenant1
-      namespace: dpu-cplane-tenant1
   virtualMachineTemplate:
     image: <registry>/simfleet-node:<tag>
     resources:
@@ -211,7 +207,6 @@ shows a complete set of DPF objects to pair with a fleet.
 | `virtualMachineTemplate` | Guest image, resources and placement. Without it no guests boot.                |
 | `dpuNodeTemplate`        | Labels and reboot method for each `DPUNode`.                                    |
 | `dpuDeviceTemplate`      | Labels and number of PFs for each `DPUDevice`.                                  |
-| `bootstrap`              | The `DPUCluster` the guests join.                                               |
 | `dpuAgent`               | DPU type, reboot methods, BMC firmware, response and phase delays. Immutable.   |
 
 The full reference is in [`api/v1alpha1`](api/v1alpha1/simfleet_types.go).

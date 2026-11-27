@@ -42,7 +42,7 @@ ssh <host> 'sudo bash -s' < docs/scenarios/zero-trust-passthrough/install-kubevi
    other platforms.
 3. **Passthrough bundle + SimFleet** (`install-passthrough-simfleet.sh`).
   Uses `passthrough-simfleet.yaml` and renders `VM_IMAGE`, `BFB_URL`,
-   `REPLICAS`, and the DPUCluster reference into the manifest before a single
+   and `REPLICAS` into the manifest before a single
    apply, so the controller never sees the manifest defaults. `FLEET_ID` (default `passthrough`) is rendered into the DPUSet
    name, the SimFleet name (`${FLEET_ID}-fleet`), and the pool label so two
    fleets in the same namespace do not collide. The BFB, flavor, service
@@ -64,7 +64,7 @@ Overrides for step 3:
 
 | Variable                              | Default                                                   |
 | ------------------------------------- | --------------------------------------------------------- |
-| `DPU_CLUSTER_NAME` / `DPU_CLUSTER_NS` | `dpu-cplane-tenant1`                                      |
+| `DPU_CLUSTER_NAME` / `DPU_CLUSTER_NS` | `dpu-cplane-tenant1` (only the DPUCluster the script prints) |
 | `REPLICAS`                            | `2`                                                       |
 | `FLEET_ID`                            | `passthrough`                                             |
 | `VM_IMAGE`                            | required: full `simfleet-node` image reference            |

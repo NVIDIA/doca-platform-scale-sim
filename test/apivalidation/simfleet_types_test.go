@@ -110,28 +110,6 @@ var _ = Describe("SimFleet API types", func() {
 				"DeepCopy should deep-copy Conditions")
 		})
 
-		It("preserves and deep-copies the bootstrap spec", func() {
-			spec := scalev1alpha1.SimFleetSpec{
-				Replicas:              1,
-				DevicesPerDPUNode:     1,
-				DeviceSelectionLabels: map[string]string{"simfleet": "scale-3000"},
-				Bootstrap: &scalev1alpha1.BootstrapSpec{
-					DPUClusterRef: scalev1alpha1.DPUClusterReference{
-						Name:      "tenant1",
-						Namespace: "dpf-operator-system",
-					},
-				},
-			}
-
-			copied := spec.DeepCopy()
-			Expect(copied.Bootstrap).NotTo(BeNil())
-			Expect(copied.Bootstrap.DPUClusterRef.Name).To(Equal("tenant1"))
-			Expect(copied.Bootstrap.DPUClusterRef.Namespace).To(Equal("dpf-operator-system"))
-
-			copied.Bootstrap.DPUClusterRef.Name = "mutated"
-			Expect(spec.Bootstrap.DPUClusterRef.Name).To(Equal("tenant1"), "DeepCopy should deep-copy Bootstrap")
-		})
-
 		It("preserves and deep-copies the dpuAgent spec pointers", func() {
 			enabled := true
 			dpuType := "bf4"
